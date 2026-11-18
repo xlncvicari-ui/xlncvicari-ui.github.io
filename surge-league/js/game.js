@@ -398,8 +398,16 @@ AFRAME.registerComponent('surge-game', {
   },
 
   // Load into the dream: fade out, swap the world, show its name, fade back in, then count down.
+  // Shuffle tiles: roll the arena, mode and bot level fresh for every match (practice is left out of shuffled modes).
+  rollShuffles() {
+    const pick = list => list[Math.floor(Math.random() * list.length)];
+    if (this.menu.arena === 'shuffle') this.arena = pick(ARENAS);
+    if (this.menu.mode === 'shuffle') this.mode = pick(MODES.filter(m => m.bots));
+    if (this.menu.bots === 'shuffle') this.level = pick(LEVELS);
+  },
   enterPortal() {
     this.save.menu = { ...this.menu }; writeSave(this.save);
+    this.rollShuffles();
     this.nextRealm = this.previewRealm();
     this.shuffleNext = null;
     this.newMatch();
@@ -414,6 +422,7 @@ AFRAME.registerComponent('surge-game', {
     d.pos.set((Math.random() - 0.5) * 3, 16 + (Math.random() - 0.5) * 2, 0); d.vel.set((Math.random() - 0.5) * 7, 2 + Math.random() * 3, 0); d.quat.identity();
     Object.assign(d, { holder: null, hand: null, pulledBy: null, snapping: false, tractor: null, passTo: null, lastThrower: null, noCatch: 0, holdT: 0, curve: 0, bankT: -99, away: 0, spin: 0, mega: false });
     this.rig.position.set(0, 14 - 1.3, 40);
+    if (UP.clone().applyQuaternion(this.rig.quaternion).y < 0.999) this.blinkT = 0.35;
     this.rig.rotation.set(0, 0, 0);
     this.steerDir = null; this.levelT = 0; this.turnEase = 0; this.turnRate = 0;
     this.vel.set(0, 0, 0); this.holdVel.set(0, 0, 0);
@@ -468,6 +477,8 @@ AFRAME.registerComponent('surge-game', {
   },
   endMatch() {
     this.state = 'over';
+    // Ended upside down? Blink and stand upright so the menu is level.
+    if (UP.clone().applyQuaternion(this.rig.quaternion).y < 0.999) { this.blinkT = 0.35; this.rig.rotation.set(0, 0, 0); this.steerDir = null; }
     this.disc.holder = null; this.snitch.active = false;
     this.result = Profiles.record(this.save, { mode: this.mode.id, arena: this.arena.id, realm: this.realm.id, level: this.level.name, ranked: this.mode.ranked && this.mode.bots,
                                                botRating: this.level.rating, scoreFor: this.score.blue, scoreAgainst: this.score.orange, stats: this.stats });
@@ -804,23 +815,25 @@ AFRAME.registerComponent('surge-game', {
         const r = REALMS.find(x => x.id === btn.value);
         return `Ride a ${r.ride.toLowerCase()}. Power: ${r.powerName}. Hazard: ${r.hazardName}.`;
       }
-      case 'arena': return ARENAS.find(a => a.id === btn.value).blurb;
-      case 'mode': { const m = MODES.find(x => x.id === btn.value); return m.blurb + (m.ranked ? ' Ranked.' : ' Not ranked.'); }
-      case 'bots': return `Bot strength ${LEVELS.find(l => l.name === btn.value).rating}. Your rank moves more against stronger bots.`;
+      case 'arena': return btn.value === 'shuffle' ? 'A random arena every match.' : ARENAS.find(a => a.id === btn.value).blurb;
+      case 'mode': { if (btn.value === 'shuffle') return 'A random mode every match (bots always on).'; const m = MODES.find(x => x.id === btn.value); return m.blurb + (m.ranked ? ' Ranked.' : ' Not ranked.'); }
+      case 'fullshuffle': return 'Shuffle everything: realm, arena, mode and bot level are a surprise every match. Starts right away.';
+      case 'version': return VERSION_LINK.hint;
+      case 'bots': if (btn.value === 'SHUFFLE') return 'Rookie, Pro or Legend bots, picked at random every match.'; return `Bot strength ${LEVELS.find(l => l.name === btn.value).rating}. Your rank moves more against stronger bots.`;
       case 'player-prev': case 'player-next': return `Switch player. ${p.name}: ${p.wins} wins, ${p.losses} losses, ${p.draws} draws.`;
       case 'player-new': return 'Add a new player on this headset. Rename players on the 2D page.';
       case 'online': return this.save.server ? 'Look for an online match (1 vs 1). Click again to stop.' : 'Add a league server address on the 2D page to play people online.';
-      case 'v1': return 'Switch to version 1, the original classic game.';
       case 'help': return 'See every button on both controllers, and all the ways to score.';
       case 'home': return window.SURGE_APP ? 'Close Surge League.' : 'Leave Surge League and go back to the Quest Games menu.';
-      case 'play': return `${this.previewRealm().name} · ${this.arena.name} · ${this.mode.name} · ${this.level.name} bots`;
+      case 'play': return `${this.previewRealm().name} · ${this.menu.arena === 'shuffle' ? 'SHUFFLED ARENA' : this.arena.name} · ${this.menu.mode === 'shuffle' ? 'SHUFFLED MODE' : this.mode.name} · ${this.menu.bots === 'shuffle' ? 'SHUFFLED' : this.level.name} bots`;
     }
     return '';
   },
   menuModel() {
     const p = Profiles.current(this.save), r = this.state === 'over' && this.result;
     return {
-      realmId: this.menu.realm, arenaId: this.arena.id, modeId: this.mode.id, level: this.level.name, inVR: this.inVR,
+      realmId: this.menu.realm, arenaId: this.menu.arena === 'shuffle' ? 'shuffle' : this.arena.id, modeId: this.menu.mode === 'shuffle' ? 'shuffle' : this.mode.id,
+      level: this.menu.bots === 'shuffle' ? 'SHUFFLE' : this.level.name, inVR: this.inVR, versionLabel: VERSION_LINK.label,
       profile: { name: p.name, sub: `${Profiles.rank(p.rating).name} ${Math.round(p.rating)}   ·   W${p.wins}  L${p.losses}  D${p.draws}` },
       onlineLabel: this.net.label(), onlineOn: this.net.status === 'searching' || !!this.net.match,
       result: r ? { blue: this.score.blue, orange: this.score.orange,
@@ -830,9 +843,13 @@ AFRAME.registerComponent('surge-game', {
   menuAction(btn) {
     const v = btn.value;
     if (btn.id === 'realm') { if (this.menu.realm !== v || v === 'shuffle') { this.menu.realm = v; this.shuffleNext = null; this.applyRealm(this.previewRealm()); } }
-    else if (btn.id === 'arena') { if (this.arena.id !== v) { this.menu.arena = v; this.arena = ARENAS.find(a => a.id === v); this.buildArena(); } }
-    else if (btn.id === 'mode') { if (this.mode.id !== v) { this.menu.mode = v; this.mode = MODES.find(m => m.id === v); this.buildArena(); this.newMatch(); } }
-    else if (btn.id === 'bots') { this.level = LEVELS.find(l => l.name === v); this.save.level = LEVELS.indexOf(this.level); }
+    else if (btn.id === 'arena') { this.menu.arena = v; if (v !== 'shuffle' && this.arena.id !== v) { this.arena = ARENAS.find(a => a.id === v); this.buildArena(); } }
+    else if (btn.id === 'mode') { this.menu.mode = v; if (v !== 'shuffle' && this.mode.id !== v) { this.mode = MODES.find(m => m.id === v); this.buildArena(); this.newMatch(); } }
+    else if (btn.id === 'bots') { this.menu.bots = v === 'SHUFFLE' ? 'shuffle' : v; if (v !== 'SHUFFLE') { this.level = LEVELS.find(l => l.name === v); this.save.level = LEVELS.indexOf(this.level); } }
+    else if (btn.id === 'fullshuffle') {
+      Object.assign(this.menu, { realm: 'shuffle', arena: 'shuffle', mode: 'shuffle', bots: 'shuffle' }); this.shuffleNext = null;
+      this.flash('FULL SHUFFLE: realm, arena, mode and bots are a surprise every match.', 2.5); this.enterPortal(); return;
+    }
     else if (btn.id === 'player-prev' || btn.id === 'player-next') {
       const list = this.save.profiles, i = list.findIndex(x => x.id === this.save.active);
       this.save.active = list[(i + (btn.id === 'player-next' ? 1 : -1) + list.length) % list.length].id;
@@ -845,7 +862,7 @@ AFRAME.registerComponent('surge-game', {
       else if (this.net.status === 'searching') this.net.unqueue();
       else this.net.queue(this.mode.id, this.arena.id, 2);
     } else if (btn.id === 'help') return this.openHelp();
-    else if (btn.id === 'v1') return this.leaveTo('v1/');
+    else if (btn.id === 'version') return this.leaveTo(VERSION_LINK.url);
     else if (btn.id === 'home') return this.exitGame();
     else if (btn.id === 'play') { this.enterPortal(); return; }
     this.save.menu = { ...this.menu }; writeSave(this.save);
@@ -1207,7 +1224,8 @@ AFRAME.registerComponent('surge-game', {
     if (inp.inVR && this.flight !== 'head') {
       const sum = new T.Vector3(); let n = 0;
       for (const h of inp.hands) {
-        if (h.desktop || h.grip || (d.holder === 'player' && d.hand === h.side)) continue;
+        // Skip busy hands: holding the disc, gripping, or swinging fast (a punch or a throw's follow-through).
+        if (h.desktop || h.grip || h.realSpeed > 1.8 || (d.holder === 'player' && d.hand === h.side)) continue;
         sum.add(h.dir); n++;
       }
       if (n && sum.length() > 0.5) {
@@ -1233,13 +1251,15 @@ AFRAME.registerComponent('surge-game', {
     const tilted = inp.rigUp.y < 0.9995;
     const engaged = live && (this.boosting || thrust.length() > 0.3);
     this.turnEase = (this.turnEase || 0) + ((engaged ? 1 : 0) - (this.turnEase || 0)) * (1 - Math.exp(-6 * dt));
-    if (tilted && (this.levelT > 0 || this.flight !== 'free' || !live)) {
+    if (tilted && (this.levelT > 0 || this.flight !== 'free') && live) {
       // Upright again, keeping the direction you're looking.
       const hl = this.headFwd.clone().applyQuaternion(start.clone().invert()), hw = this.headFwd;
       const localYaw = Math.hypot(hl.x, hl.z) > 0.2 ? Math.atan2(-hl.x, -hl.z) : 0;
       const ref = Math.hypot(hw.x, hw.z) > 0.2 ? hw : this.vel.lengthSq() > 1 ? this.vel : new T.Vector3(0, 0, -1).applyQuaternion(start);
       const target = new T.Quaternion().setFromAxisAngle(UP, Math.atan2(-ref.x, -ref.z) - localYaw);
-      this.turnAboutHead(() => q.slerp(target, 1 - Math.exp(-(this.levelT > 0 ? 3.5 : !live ? 6 : 2.5) * dt)));
+      // Capped turn speed (about 100°/s) so leveling out never whips you around.
+      const ang = 2 * Math.acos(Math.min(1, Math.abs(q.dot(target))));
+      this.turnAboutHead(() => q.rotateTowards(target, Math.min(LEVEL_MAX, ang * (this.levelT > 0 ? 3 : 2)) * dt));
     } else if (this.handSteer && this.turnEase > 0.01 && this.flight !== 'head') {
       const qi = start.clone().invert(), a = this.steerDir.clone().applyQuaternion(qi);
       const hf = this.headFwd.clone().applyQuaternion(qi); hf.y = 0;
@@ -1949,7 +1969,9 @@ AFRAME.registerComponent('surge-game', {
     for (const u of world.updates) u(dt, this.time);
     // Hide inside a drift cloud: everything goes white around you.
     const inCloud = this.hazard.inside && this.hazard.inside(this.headPos), fadeM = this.fadeMat();
-    if (fadeM && this.state !== 'portal') {
+    this.blinkT = Math.max(0, (this.blinkT || 0) - dt);
+    if (fadeM && this.state !== 'portal' && this.blinkT > 0) { fadeM.color.set('#000000'); fadeM.opacity = Math.min(1, this.blinkT * 4); }
+    else if (fadeM && this.state !== 'portal') {
       this.cloudFog = (this.cloudFog || 0) + ((inCloud ? 0.55 : 0) - (this.cloudFog || 0)) * Math.min(1, dt * 4);
       this.portalFlash = Math.max(0, this.portalFlash - dt * 3);
       if (this.portalFlash * 0.7 > this.cloudFog) { fadeM.color.set('#b49cff'); fadeM.opacity = this.portalFlash * 0.7; }

@@ -397,23 +397,23 @@ function paintStartMenu(g, W, H, panel, m) {
 
   // ARENA and MODE
   rowLabel('ARENA', 434);
-  const aw = (W - P * 2 - 2 * 16) / 3;
-  ARENAS.forEach((a, i) => tile({ id: 'arena', value: a.id, x: P + i * (aw + 16), y: 452, w: aw, h: 92, row: 2, col: i }, m.arenaId === a.id, b => {
+  const aw = (W - P * 2 - 3 * 16) / 4, SHUF = { id: 'shuffle', name: 'SHUFFLE', short: 'a different arena every match' };
+  [...ARENAS, SHUF].forEach((a, i) => tile({ id: 'arena', value: a.id, x: P + i * (aw + 16), y: 452, w: aw, h: 92, row: 2, col: i }, m.arenaId === a.id, b => {
     g.textAlign = 'center'; g.fillStyle = ink; fitFont(g, a.name, b.w - 30, 32, 800); g.fillText(a.name, b.x + b.w / 2, b.y + 34);
     g.fillStyle = dim; fitFont(g, a.short, b.w - 30, 21, 600); g.fillText(a.short, b.x + b.w / 2, b.y + 68);
   }));
   rowLabel('MODE', 582);
-  const mw = (W - P * 2 - 3 * 16) / 4;
-  MODES.forEach((md, i) => tile({ id: 'mode', value: md.id, x: P + i * (mw + 16), y: 600, w: mw, h: 92, row: 3, col: i }, m.modeId === md.id, b => {
+  const modeTiles = [...MODES, { ...SHUF, short: 'a different mode every match' }], mw = (W - P * 2 - (modeTiles.length - 1) * 16) / modeTiles.length;
+  modeTiles.forEach((md, i) => tile({ id: 'mode', value: md.id, x: P + i * (mw + 16), y: 600, w: mw, h: 92, row: 3, col: i }, m.modeId === md.id, b => {
     g.textAlign = 'center'; g.fillStyle = ink; fitFont(g, md.name, b.w - 24, 30, 800); g.fillText(md.name, b.x + b.w / 2, b.y + 34);
     g.fillStyle = dim; fitFont(g, md.short, b.w - 24, 20, 600); g.fillText(md.short, b.x + b.w / 2, b.y + 68);
   }));
 
   // BOTS chips + ONLINE
   rowLabel('BOTS', 730);
-  const bw = 210;
-  LEVELS.forEach((l, i) => tile({ id: 'bots', value: l.name, x: P + 90 + i * (bw + 14), y: 708, w: bw, h: 64, row: 4, col: i }, m.level === l.name, b => {
-    g.textAlign = 'center'; g.fillStyle = ink; g.font = uiFont(28, 800); g.fillText(l.name, b.x + b.w / 2, b.y + b.h / 2 + 1);
+  const bw = 170;
+  [...LEVELS, { name: 'SHUFFLE' }].forEach((l, i) => tile({ id: 'bots', value: l.name, x: P + 90 + i * (bw + 14), y: 708, w: bw, h: 64, row: 4, col: i }, m.level === l.name, b => {
+    g.textAlign = 'center'; g.fillStyle = ink; fitFont(g, l.name, b.w - 20, 28, 800); g.fillText(l.name, b.x + b.w / 2, b.y + b.h / 2 + 1);
   }));
   const ob = { id: 'online', x: W - P - 520, y: 708, w: 520, h: 64, row: 4, col: 3 };
   tile(ob, m.onlineOn, b => { g.textAlign = 'center'; g.fillStyle = ink; fitFont(g, 'ONLINE: ' + m.onlineLabel, b.w - 30, 24, 700); g.fillText('ONLINE: ' + m.onlineLabel, b.x + b.w / 2, b.y + b.h / 2 + 1); });
@@ -427,13 +427,14 @@ function paintStartMenu(g, W, H, panel, m) {
     const grd = g.createLinearGradient(0, b.y, 0, b.y + b.h);
     grd.addColorStop(0, hexA(color, big ? 1 : 0.35)); grd.addColorStop(1, hexA(color, big ? 0.75 : 0.2));
     g.fillStyle = grd; rrect(g, b.x, b.y, b.w, b.h, 22); g.fill();
-    g.textAlign = 'center'; g.fillStyle = big ? '#04121f' : ink; g.font = uiFont(big ? 46 : 28, 900);
+    g.textAlign = 'center'; g.fillStyle = big ? '#04121f' : ink; fitFont(g, label, b.w - 30, big ? 46 : 28, 900);
     g.fillText(label, b.x + b.w / 2, b.y + b.h / 2 + 2);
   };
-  btn({ id: 'help', x: P, y: 880, w: 330, h: 96, row: 5, col: 0 }, 'HOW TO PLAY', '#3d8bff');
-  btn({ id: 'v1', x: P + 346, y: 880, w: 240, h: 96, row: 5, col: 1 }, 'VERSION 1', '#7a8aa0');
-  btn({ id: 'home', x: P + 602, y: 880, w: 180, h: 96, row: 5, col: 2 }, 'EXIT', '#7a8aa0');
-  btn({ id: 'play', x: W - P - 620, y: 872, w: 620, h: 112, row: 5, col: 3 }, m.result ? 'PLAY AGAIN  ▶' : 'ENTER THE DREAM  ▶', '#66ffff', true);
+  btn({ id: 'help', x: P, y: 880, w: 290, h: 96, row: 5, col: 0 }, 'HOW TO PLAY', '#3d8bff');
+  btn({ id: 'version', x: P + 306, y: 880, w: 220, h: 96, row: 5, col: 1 }, m.versionLabel || 'VERSION 1', '#7a8aa0');
+  btn({ id: 'home', x: P + 542, y: 880, w: 140, h: 96, row: 5, col: 2 }, 'EXIT', '#7a8aa0');
+  btn({ id: 'fullshuffle', x: P + 698, y: 880, w: 300, h: 96, row: 5, col: 3 }, 'FULL SHUFFLE', '#c86bff');
+  btn({ id: 'play', x: P + 1014, y: 872, w: W - P * 2 - 1014, h: 112, row: 5, col: 4 }, m.result ? 'PLAY AGAIN  ▶' : 'ENTER THE DREAM  ▶', '#66ffff', true);
 
   g.textAlign = 'center'; g.fillStyle = dim; g.font = uiFont(21, 600);
   g.fillText(m.inVR ? 'Point and pull the trigger, or use the left stick and A.   In a match, press Y to pause.'

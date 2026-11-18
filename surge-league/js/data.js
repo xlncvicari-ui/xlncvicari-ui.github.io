@@ -2,6 +2,8 @@
 const T = AFRAME.THREE;
 const DEG = Math.PI / 180;
 const STORE_KEY = 'vr-games-surge-league-v2';
+// The start menu's VERSION button (split test: version 3 is the new big update).
+const VERSION_LINK = { url: 'v3/', label: 'VERSION 3', hint: 'Try version 3: new graphics, combat (knock rivals out), smaller arenas.' };
 
 // Every arena is the same frisbee-shaped volume so skills carry over: blue half at +z, orange half at -z.
 const ARENA_R = 60, Y_MIN = 2, Y_MAX = 40, GOAL_Z = 52;
@@ -13,7 +15,7 @@ const EASY_SPEED = 9, EASY_RESPONSE = 4;
 // Flight: hands steer, a held stick-click keeps boosting (energy per second), and free flight turns your ride once you point
 // past FREE_PITCH (up/down) or FREE_YAW (left/right of where you look). TURN_GAIN = turn speed per radian past that, TURN_MAX caps it.
 const BOOST_HOLD_COST = 30, STEER_LIFT = 12 * DEG, STEER_SMOOTH = 12;
-const FREE_PITCH = 45 * DEG, FREE_YAW = 50 * DEG, TURN_GAIN = 2.4, TURN_MAX = 2.2;
+const FREE_PITCH = 45 * DEG, FREE_YAW = 50 * DEG, TURN_GAIN = 2.4, TURN_MAX = 2.2, LEVEL_MAX = 1.75;
 const FLIGHT_MODES = ['free', 'hands', 'head'];
 const FLIGHT_LABEL = { free: 'FLIGHT: FREE (HANDS STEER, FLIPS)', hands: 'FLIGHT: HANDS STEER, STAY LEVEL', head: 'FLIGHT: CLASSIC (GO WHERE YOU LOOK)' };
 const ENERGY_MAX = 100, REGEN = 20, REGEN_DELAY = 0.6, PUSH_COST = 15;

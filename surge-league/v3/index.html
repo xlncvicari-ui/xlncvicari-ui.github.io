@@ -1,0 +1,185 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Surge League</title>
+<script src="/surge-league/lib/aframe.min.js"></script><script src="/surge-league/lib/offline.js"></script>
+<script src="js/data.js"></script>
+<script src="js/kit.js"></script>
+<script src="js/realms.js"></script>
+<script src="js/ui.js"></script>
+<script src="js/styles.js"></script>
+<script src="js/look.js"></script>
+<script src="js/gfx.js"></script>
+<script src="js/profile.js"></script>
+<script src="js/net.js"></script>
+<script src="js/combat.js"></script>
+<script src="js/game.js"></script>
+<style>
+  html, body { margin: 0; height: 100%; background: #0b1a2b; font-family: system-ui, sans-serif; }
+  #panel { position: fixed; left: 12px; top: 12px; z-index: 10; width: min(440px, calc(100vw - 24px)); max-height: calc(100vh - 24px); overflow: auto;
+           background: rgba(8,18,32,.88); color: #e8f3ff; padding: 12px 14px; border-radius: 10px; font-size: 14px; line-height: 1.45; box-sizing: border-box; }
+  #panel h1 { font-size: 18px; margin: 0 0 6px; }
+  #panel h1 small { font-weight: 400; color: #9bb3cc; font-size: 12px; }
+  #panel b { color: #7ff; }
+  #panel label { display: block; margin-top: 8px; color: #9bb3cc; font-size: 12px; }
+  #panel input { width: 100%; box-sizing: border-box; margin-top: 2px; padding: 6px 8px; border-radius: 6px; border: 1px solid #2b4a6e; background: #0e2238; color: #e8f3ff; font-size: 14px; }
+  #panel button { margin-top: 8px; background: #1e3a5c; color: #e8f3ff; border: 0; border-radius: 6px; padding: 5px 10px; cursor: pointer; }
+  #status { white-space: pre-wrap; font-size: 12px; color: #ffd166; margin-top: 10px; }
+  details summary { cursor: pointer; margin-top: 8px; color: #7ff; }
+  #tapToPlay { position: fixed; inset: 0; z-index: 20; display: none; flex-direction: column; align-items: center; justify-content: center; gap: 18px;
+               background: radial-gradient(circle at 50% 40%, #1d3d61, #0b1a2b 70%); color: #9bb3cc; font-size: 22px; }
+  #tapToPlay button { font: 800 44px system-ui, sans-serif; padding: 28px 56px; border: 0; border-radius: 22px; background: #66ffff; color: #04121f; cursor: pointer; }
+  #cross { position: fixed; left: 50%; top: 50%; width: 8px; height: 8px; margin: -4px 0 0 -4px; border: 2px solid #fff; border-radius: 50%; z-index: 9; pointer-events: none; opacity: .7; }
+</style>
+</head>
+<body>
+<div id="panel">
+  <h1>Surge League <small>version 2: dream realms</small></h1>
+  <div>Two against two in the sky. Every match is a new dream realm with its own world, ride and power. Press the <b>VR</b> button, then use the menu in front of you.</div>
+  <label>Your player name (saved on this device)<input id="name" maxlength="16" autocomplete="off"></label>
+  <label>League server for online play (optional, e.g. ws://192.168.1.20:8790)<input id="server" autocomplete="off" placeholder="leave empty to play offline"></label>
+  <button id="saveSettings">Save</button>
+  <details>
+    <summary>Controls</summary>
+    <div><b>Quest</b>: point your hands where you want to go and push the left stick forward. Push either stick down to boost (keep it down to keep boosting). Point both hands up and boost to loop over backwards; you can fly upside down. A or X turns you right side up. Right stick rises, sinks and snap turns. B uses the realm power. <b>Swing a fist into a rival to punch</b>; boost into them to tackle. Empty a rider's health and they respawn at their own end. Grip grabs the disc or an air pocket; swing and let go to throw. Point at your ally and pull the trigger to pass. <b>Y pauses</b> (also: how to play, arm mode, restart, exit). The menu's HOW TO PLAY shows both controllers.</div>
+    <div><b>PC</b>: WASD fly, E / Q up / down, drag to look, Shift boost (hold to keep going), L right side up, V punch, C power, hold G to pull the disc, Space throws, F passes. Arrow keys and Enter or the mouse work the menus, P or Esc pauses, hold Tab for the score.</div>
+  </details>
+  <div style="margin-top:8px"><a href="../" style="color:#7ff">Play version 2</a> &nbsp;|&nbsp; <a href="../v1/" style="color:#7ff">Play version 1 (classic)</a> &nbsp;|&nbsp; <a href="../../" style="color:#7ff">Quest Games home</a></div>
+  <div id="status"></div>
+  <button onclick="document.getElementById('panel').style.display='none'">Hide</button>
+</div>
+<div id="cross"></div>
+<div id="tapToPlay"><button>PLAY SURGE LEAGUE</button><p>Press the Meta button to quit.</p></div>
+
+<a-scene surge-game renderer="antialias: true; colorManagement: true; toneMapping: ACESFilmic; exposure: 1.1; foveationLevel: 1; sortTransparentObjects: true" vr-mode-ui="enabled: true"
+         loading-screen="dotsColor: #66ffff; backgroundColor: #0b1a2b">
+  <a-entity id="hemi" light="type: hemisphere; color: #ffffff; groundColor: #4a6a4a; intensity: 0.9"></a-entity>
+  <a-entity id="sun" light="type: directional; color: #fff4dd; intensity: 0.8" position="30 60 20"></a-entity>
+
+  <a-entity id="disc" position="0 16 0">
+    <a-entity id="discSpin">
+      <a-entity id="dv-disc">
+        <a-cylinder radius="0.32" height="0.05" material="color: #e9fbff; emissive: #66ffff; emissiveIntensity: 0.5"></a-cylinder>
+        <a-torus radius="0.32" radius-tubular="0.03" rotation="90 0 0" material="color: #66ffff; emissive: #33ffff; emissiveIntensity: 1"></a-torus>
+        <a-box width="0.36" height="0.06" depth="0.06" material="color: #10324a"></a-box>
+      </a-entity>
+      <a-entity id="dv-puck" visible="false">
+        <a-cylinder radius="0.32" height="0.12" material="color: #2b2f36; metalness: 0.8; roughness: 0.3"></a-cylinder>
+        <a-torus radius="0.32" radius-tubular="0.035" rotation="90 0 0" material="color: #ff8a1f; emissive: #ff6a00; emissiveIntensity: 1"></a-torus>
+      </a-entity>
+      <a-entity id="dv-quaffle" visible="false">
+        <a-sphere radius="0.3" segments-width="18" segments-height="12" material="color: #b8322a; roughness: 0.8"></a-sphere>
+        <a-torus radius="0.3" radius-tubular="0.025" material="color: #e8d8b0"></a-torus>
+      </a-entity>
+      <a-entity id="dv-dodgeball" visible="false">
+        <a-sphere radius="0.34" segments-width="18" segments-height="12" material="color: #e8342e; roughness: 0.5"></a-sphere>
+        <a-torus radius="0.34" radius-tubular="0.03" rotation="90 0 0" material="color: #ffffff"></a-torus>
+      </a-entity>
+    </a-entity>
+    <a-sphere radius="0.7" segments-width="16" segments-height="12" material="shader: flat; color: #9ff; opacity: 0.18; transparent: true; depthWrite: false"></a-sphere>
+  </a-entity>
+
+  <a-entity id="snitch" visible="false">
+    <a-sphere radius="0.15" segments-width="16" segments-height="12" material="color: #ffd23d; emissive: #ffb000; emissiveIntensity: 0.8; metalness: 0.7; roughness: 0.3"></a-sphere>
+    <a-plane id="wingL" width="0.45" height="0.16" position="-0.27 0.04 0" material="shader: flat; color: #ffffff; opacity: 0.85; transparent: true; side: double"></a-plane>
+    <a-plane id="wingR" width="0.45" height="0.16" position="0.27 0.04 0" material="shader: flat; color: #ffffff; opacity: 0.85; transparent: true; side: double"></a-plane>
+    <a-sphere radius="0.5" segments-width="12" segments-height="8" material="shader: flat; color: #ffd23d; opacity: 0.2; transparent: true; depthWrite: false"></a-sphere>
+  </a-entity>
+
+  <a-entity id="rig" position="0 12.7 40">
+    <a-entity id="head" camera="near: 0.05; far: 1500" look-controls="pointerLockEnabled: false" position="0 1.3 0">
+      <a-plane id="vignette" width="0.6" height="0.6" position="0 0 -0.12" material="shader: flat; transparent: true; opacity: 0; depthTest: false; depthWrite: false"></a-plane>
+      <a-plane id="fade" width="0.8" height="0.8" position="0 0 -0.11" material="shader: flat; color: #000; transparent: true; opacity: 0; depthTest: false; depthWrite: false"></a-plane>
+    </a-entity>
+    <a-entity id="leftHand" oculus-touch-controls="hand: left"></a-entity>
+    <a-entity id="rightHand" oculus-touch-controls="hand: right"></a-entity>
+    <a-sphere id="gloveL" radius="0.13" visible="false" segments-width="14" segments-height="10" material="color: #66ffff; emissive: #33ffff; emissiveIntensity: 0.7"></a-sphere>
+    <a-sphere id="gloveR" radius="0.13" visible="false" segments-width="14" segments-height="10" material="color: #66ffff; emissive: #33ffff; emissiveIntensity: 0.7"></a-sphere>
+
+    <a-entity id="cockpit">
+      <a-entity id="ride-saucer" position="0 0.35 0">
+        <a-cylinder radius="1.1" height="0.12" segments-radial="28" material="color: #8aa4c4; metalness: 0.6; roughness: 0.3"></a-cylinder>
+        <a-torus radius="1.1" radius-tubular="0.05" rotation="90 0 0" segments-tubular="48" material="color: #3d8bff; emissive: #3d8bff; emissiveIntensity: 0.8"></a-torus>
+        <a-cone radius-bottom="0.9" radius-top="0.3" height="0.3" position="0 -0.2 0" rotation="180 0 0" segments-radial="20" material="color: #5d7391; metalness: 0.5; roughness: 0.4"></a-cone>
+        <a-circle id="thrusterGlow" radius="0.5" position="0 -0.36 0" rotation="90 0 0" material="shader: flat; color: #66ffff; opacity: 0.15; transparent: true"></a-circle>
+        <a-sphere radius="0.05" position="1.05 0.06 0" material="color: #fff; emissive: #ffd23d; emissiveIntensity: 1"></a-sphere>
+        <a-sphere radius="0.05" position="-1.05 0.06 0" material="color: #fff; emissive: #ffd23d; emissiveIntensity: 1"></a-sphere>
+        <a-sphere radius="0.05" position="0 0.06 1.05" material="color: #fff; emissive: #ffd23d; emissiveIntensity: 1"></a-sphere>
+        <a-sphere radius="0.05" position="0 0.06 -1.05" material="color: #fff; emissive: #ffd23d; emissiveIntensity: 1"></a-sphere>
+      </a-entity>
+      <a-entity id="ride-foundry" visible="false">
+        <a-box width="1.3" height="0.25" depth="1.0" position="0 0.2 0" material="color: #5f6670; metalness: 0.8; roughness: 0.4"></a-box>
+        <a-box width="0.3" height="0.3" depth="0.4" position="0.55 1.0 0.15" material="color: #6b7380; metalness: 0.8; roughness: 0.4"></a-box>
+        <a-box width="0.3" height="0.3" depth="0.4" position="-0.55 1.0 0.15" material="color: #6b7380; metalness: 0.8; roughness: 0.4"></a-box>
+        <a-box width="0.9" height="0.22" depth="0.18" position="0 0.38 -0.6" rotation="-25 0 0" material="color: #3d4148; metalness: 0.7; roughness: 0.4"></a-box>
+        <a-box width="0.8" height="0.04" depth="0.02" position="0 0.45 -0.7" rotation="-25 0 0" material="color: #ff8a1f; emissive: #ff6a00; emissiveIntensity: 1"></a-box>
+        <a-cylinder radius="0.16" height="0.4" position="0.4 -0.05 0.2" material="color: #3d4148; metalness: 0.8"></a-cylinder>
+        <a-cylinder radius="0.16" height="0.4" position="-0.4 -0.05 0.2" material="color: #3d4148; metalness: 0.8"></a-cylinder>
+      </a-entity>
+      <a-entity id="ride-castle" visible="false">
+        <a-cylinder radius="0.035" height="2.3" rotation="90 0 0" position="0 0.38 -0.25" material="color: #7a5230; roughness: 0.9"></a-cylinder>
+        <a-cone radius-bottom="0.28" radius-top="0.05" height="0.75" rotation="-90 0 0" position="0 0.36 1.15" material="color: #d9b45a; roughness: 1"></a-cone>
+        <a-torus radius="0.06" radius-tubular="0.015" position="0 0.38 0.78" material="color: #c9a86a"></a-torus>
+      </a-entity>
+      <a-entity id="ride-gym" visible="false">
+        <a-box width="0.55" height="0.07" depth="1.5" position="0 0.06 0" material="color: #ff9ecf; roughness: 0.5"></a-box>
+        <a-box width="0.5" height="0.02" depth="1.4" position="0 0.1 0" material="color: #3d3a48; roughness: 1"></a-box>
+        <a-circle radius="0.35" position="0 -0.01 0" rotation="90 0 0" material="shader: flat; color: #66ffff; opacity: 0.4; transparent: true"></a-circle>
+      </a-entity>
+      <a-entity id="ride-cloud" visible="false">
+        <a-sphere radius="0.55" position="0 0.15 0.1" segments-width="16" segments-height="10" material="color: #ffffff; roughness: 1"></a-sphere>
+        <a-sphere radius="0.45" position="0.55 0.1 0.05" segments-width="16" segments-height="10" material="color: #f4f8ff; roughness: 1"></a-sphere>
+        <a-sphere radius="0.45" position="-0.55 0.1 0.05" segments-width="16" segments-height="10" material="color: #f4f8ff; roughness: 1"></a-sphere>
+        <a-sphere radius="0.4" position="0 0.05 -0.55" segments-width="16" segments-height="10" material="color: #ffffff; roughness: 1"></a-sphere>
+      </a-entity>
+
+      <!-- The scoreboard and menus are drawn by js/ui.js (canvas panels) and attached to these two anchors. -->
+      <a-entity id="hud" position="0 0.62 -0.85" rotation="-35 0 0"></a-entity>
+      <a-entity id="menu" position="0 1.22 -1.55"></a-entity>
+    </a-entity>
+  </a-entity>
+</a-scene>
+
+<script>
+  // 2D page settings: player name and league server, saved on this device.
+  const game = () => document.querySelector('a-scene').components['surge-game'];
+  const nameBox = document.getElementById('name'), serverBox = document.getElementById('server');
+  const fill = () => { const g = game(); if (!g || !g.ready) return setTimeout(fill, 300); nameBox.value = Profiles.current(g.save).name; serverBox.value = g.save.server || ''; };
+  fill();
+  document.getElementById('saveSettings').onclick = () => {
+    const g = game(), p = Profiles.current(g.save);
+    p.name = (nameBox.value.trim() || p.name).toUpperCase().slice(0, 16);
+    g.save.server = serverBox.value.trim();
+    writeSave(g.save);
+    if (g.save.server) g.net.connect(g.save.server, p, g.save.token); else g.net.close();
+    g.hudT = 0; g.lastMenu = '';
+    nameBox.value = p.name;
+  };
+  if ('serviceWorker' in navigator) navigator.serviceWorker.register('../sw.js', { scope: '../' }).catch(() => {});
+
+  // Opened as the installed Surge League app (?app=1): skip the 2D page and go straight into VR.
+  // Opening the app counts as your tap, so the headset lets it start VR on its own; the big button is a fallback.
+  if (new URLSearchParams(location.search).has('app')) {
+    window.SURGE_APP = { home: './?app=1' };
+    document.getElementById('panel').style.display = 'none';
+    const tap = document.getElementById('tapToPlay'), scene = document.querySelector('a-scene');
+    const enter = () => { if (!scene.is('vr-mode')) Promise.resolve(scene.enterVR()).catch(() => { tap.style.display = 'flex'; }); };
+    tap.addEventListener('click', enter);
+    scene.addEventListener('enter-vr', () => { tap.style.display = 'none'; });
+    let leftOnPurpose = false;
+    scene.addEventListener('exit-vr', () => { tap.style.display = 'flex'; leftOnPurpose = true; });
+    tap.style.display = 'flex';
+    // Try right away, and again whenever the window becomes visible (the headset refuses VR for a hidden page).
+    const auto = () => {
+      if (!navigator.xr || leftOnPurpose || document.hidden || scene.is('vr-mode') || !scene.hasLoaded) return;
+      navigator.xr.isSessionSupported('immersive-vr').then(ok => { if (ok) enter(); }, () => {});
+    };
+    if (scene.hasLoaded) auto(); else scene.addEventListener('loaded', auto);
+    document.addEventListener('visibilitychange', auto);
+    window.addEventListener('focus', auto);
+  }
+</script>
+</body>
+</html>
