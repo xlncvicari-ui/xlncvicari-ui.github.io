@@ -49,6 +49,7 @@ AFRAME.registerComponent('surge-game', {
     this.buildBots();
     this.buildPanels();
     this.surge = null; this.nextSurgeAt = 0; this.scoreAlpha = 0; this.scoreShowT = 0; this.toastAlpha = 0; this.hitBuzzAt = 0;
+    this.orbs = []; this.buffs = new Map(); this.streak = { team: null, n: 0 }; this.portalFlash = 0;
     this.arena = ARENAS.find(a => a.id === this.menu.arena) || ARENAS[0];
     this.mode = MODES.find(m => m.id === this.menu.mode) || MODES[0];
     this.applyRealm(this.previewRealm());
@@ -146,8 +147,11 @@ AFRAME.registerComponent('surge-game', {
     const add = (t, a, p) => this.add(t, a, p);
     this.bots = defs.map(def => {
       const el = add('a-entity', {}), col = TEAM_COLOR[def.team];
-      add('a-sphere', { radius: 0.3, position: '0 0.55 0', 'segments-width': 14, 'segments-height': 10, material: `color: ${col}; emissive: ${col}; emissiveIntensity: 0.3` }, el);
-      add('a-box', { width: 0.36, height: 0.1, depth: 0.08, position: '0 0.6 0.27', material: 'color: #111820; emissive: #66ffff; emissiveIntensity: 0.4' }, el);
+      // Rider: smooth team helmet with a dark glass visor, a light suit and a glowing team stripe.
+      add('a-sphere', { radius: 0.3, position: '0 0.62 0', 'segments-width': 28, 'segments-height': 18, material: `color: ${col}; metalness: 0.35; roughness: 0.3; emissive: ${col}; emissiveIntensity: 0.15` }, el);
+      add('a-sphere', { radius: 0.25, position: '0 0.64 0.11', scale: '1.05 0.55 0.85', 'segments-width': 24, 'segments-height': 12, material: 'color: #0b1320; metalness: 0.9; roughness: 0.12; emissive: #66ffff; emissiveIntensity: 0.18' }, el);
+      add('a-cone', { 'radius-bottom': 0.26, 'radius-top': 0.17, height: 0.42, position: '0 0.2 0', 'segments-radial': 20, material: 'color: #e8eef6; roughness: 0.5' }, el);
+      add('a-torus', { radius: 0.22, 'radius-tubular': 0.03, position: '0 0.24 0', rotation: '90 0 0', 'segments-tubular': 32, material: `color: ${col}; emissive: ${col}; emissiveIntensity: 0.9` }, el);
       const tag = labelSprite(def.label, { color: '#ffffff', bg: hexA(col, 0.55), height: 0.45 }); tag.position.y = 1.3; el.object3D.add(tag);
       const halo = glowSprite(col, 2.6, 0.35); halo.position.y = 0.5; el.object3D.add(halo);
       const rides = { saucer: add('a-entity', {}, el), foundry: add('a-entity', {}, el), castle: add('a-entity', {}, el), gym: add('a-entity', {}, el), cloud: add('a-entity', {}, el) };
@@ -164,7 +168,7 @@ AFRAME.registerComponent('surge-game', {
       const trail = new T.Line(trailGeo, new T.LineBasicMaterial({ color: col, transparent: true, opacity: 0.55 })); trail.frustumCulled = false;
       this.el.object3D.add(trail);
       return { ...def, el, obj: el.object3D, rides, start, pos: start.clone(), vel: new T.Vector3(), facing: new T.Vector3(0, 0, def.team === 'blue' ? -1 : 1),
-               stun: 0, cool: 0, grace: 0, power: { cool: 0, t: 0 }, trail };
+               stun: 0, cool: 0, grace: 0, power: { cool: 0, t: 0 }, trail, halo, col };
     });
   },
 
@@ -275,6 +279,13 @@ AFRAME.registerComponent('surge-game', {
       this.obstacles.push(ob);
       this.rocks.push({ mesh: st.mesh, ob, c: ob.c, r: p.r, mats: st.mats || [], update: st.update, squash: st.squash, squashT: 0 });
     }
+    // Cover to hide behind (blocks riders and the disc). Same spots in every arena, drawn in the realm's style.
+    const coverBoxes = [...mirror4(COVER_QUARTER), ...mirrorZ(COVER_MIDDLE)];
+    group.add(buildCover(realm, coverBoxes));
+    for (const b of coverBoxes) {
+      const half = new T.Vector3(b.w / 2, b.h / 2, b.d / 2);
+      this.obstacles.push({ type: 'box', c: new T.Vector3(b.x, b.y, b.z), half, nhalf: half.clone().negate() });
+    }
     // The realm's own field hazard (gravity wells, steam vents, ghost portals, bounce pads or drift clouds).
     this.hazard = HAZARD_BUILD[realm.id]();
     group.add(this.hazard.group);
@@ -365,6 +376,8 @@ AFRAME.registerComponent('surge-game', {
     for (const b of this.bots) { b.obj.visible = this.activeBots.includes(b); b.trail.visible = b.obj.visible; }
     if (this.surge) this.endSurge(true);
     this.nextSurgeAt = SURGE_FIRST[0] + Math.random() * (SURGE_FIRST[1] - SURGE_FIRST[0]);
+    this.finalSurgeOn = false; this.onFire = null; this.streak = { team: null, n: 0 };
+    this.clearOrbs(); this.buffs = new Map(); this.nextOrbAt = 8 + Math.random() * 6;
     this.kickoff();
   },
 
@@ -383,7 +396,7 @@ AFRAME.registerComponent('surge-game', {
     const d = this.disc;
     // Every kickoff is a little different: the disc pops up and drifts left or right, never toward one team.
     d.pos.set((Math.random() - 0.5) * 3, 16 + (Math.random() - 0.5) * 2, 0); d.vel.set((Math.random() - 0.5) * 7, 2 + Math.random() * 3, 0); d.quat.identity();
-    Object.assign(d, { holder: null, hand: null, pulledBy: null, snapping: false, tractor: null, passTo: null, lastThrower: null, noCatch: 0, holdT: 0, curve: 0, bankT: -99, away: 0, spin: 0 });
+    Object.assign(d, { holder: null, hand: null, pulledBy: null, snapping: false, tractor: null, passTo: null, lastThrower: null, noCatch: 0, holdT: 0, curve: 0, bankT: -99, away: 0, spin: 0, mega: false });
     this.rig.position.set(0, 14 - 1.3, 40);
     this.rig.rotation.set(0, 0, 0);
     this.vel.set(0, 0, 0); this.holdVel.set(0, 0, 0);
@@ -485,7 +498,7 @@ AFRAME.registerComponent('surge-game', {
         const btn = i => !!(gp.buttons[i] && gp.buttons[i].pressed);
         if (this.edge(side + 'Face', btn(4))) { inp.boost = true; if (side === 'right') inp.start = true; }
         if (this.edge(side + 'Stick', btn(3))) inp.pausePress = true; // click either stick: pause menu
-        if (side === 'left') { inp.moveX = sx; inp.moveY = -sy; inp.yDown = btn(5); }
+        if (side === 'left') { inp.moveX = sx; inp.moveY = -sy; if (this.edge('lY', btn(5))) inp.pausePress = true; } // Y: pause menu
         else { inp.turnX = sx; inp.climb = -sy; if (this.edge('rB', btn(5))) inp.power = true; }
         const gripPose = frame && ref && src.gripSpace ? frame.getPose(src.gripSpace, ref) : null;
         const rayPose = frame && ref ? frame.getPose(src.targetRaySpace, ref) : null;
@@ -515,8 +528,7 @@ AFRAME.registerComponent('surge-game', {
       inp.start = this.edge('kEnter', !!(k.Enter || k.NumpadEnter));
       inp.power = this.edge('kC', !!k.KeyC);
       inp.pass = this.edge('kF', !!k.KeyF);
-      inp.yDown = !!k.KeyR;
-      inp.pausePress = this.edge('kPause', !!(k.KeyP || k.Escape));
+      inp.pausePress = this.edge('kPause', !!(k.KeyP || k.Escape || k.KeyR));
       inp.menuX = (k.ArrowRight ? 1 : 0) - (k.ArrowLeft ? 1 : 0);
       inp.menuY = (k.ArrowUp ? 1 : 0) - (k.ArrowDown ? 1 : 0);
       const g = !!k.KeyG;
@@ -542,15 +554,17 @@ AFRAME.registerComponent('surge-game', {
     this.pingT -= dt;
     this.msgT = Math.max(0, this.msgT - dt);
 
-    // Y: tap switches Full motion / Easy reach, hold 1.5 s goes back to the menu (PC: R).
-    const holdNeeded = inp.inVR ? 1.5 : 0, wasHeld = this.yHold;
-    this.yHold = inp.yDown ? this.yHold + dt : 0;
-    if (inp.yDown && this.yHold > holdNeeded && wasHeld <= holdNeeded && this.state !== 'ready') { this.newMatch(); this.hudT = 0; }
-    inp.toggleMode = inp.inVR && !inp.yDown && wasHeld > 0 && wasHeld < 0.4;
     if (inp.inVR && !this.inVRBefore) this.prevButtons = {};
     this.inVRBefore = inp.inVR;
 
-    // Pause menu (click a stick, PC: P or Esc). The match clock, bots and disc all stop while it's open.
+    // How to play card (from the start menu or the pause menu). Y, A or GOT IT closes it.
+    if (this.helpOpen) {
+      this.menuPanel.mesh.visible = this.pausePanel.mesh.visible = false;
+      this.helpPanel.mesh.visible = true;
+      this.updateHelp(inp); this.updateHud(dt); return;
+    }
+    this.helpPanel.mesh.visible = false;
+    // Pause menu (Y or click a stick; PC: P or Esc). The match clock, bots and disc all stop while it's open.
     if (inp.pausePress) { if (this.pauseOpen) this.closePause(); else this.openPause(); }
     if (this.pauseOpen && !this.canPause()) this.closePause(true);
     this.menuPanel.mesh.visible = !this.pauseOpen && (this.state === 'ready' || this.state === 'over');
@@ -564,6 +578,7 @@ AFRAME.registerComponent('surge-game', {
     const live = this.state === 'playing';
     this.live = live;
     this.updateSurges(dt);
+    this.updateOrbs(dt, live);
     this.updateMode(inp, dt, live);
     this.updatePowers(dt);
     if (live && inp.power) this.usePower('player');
@@ -587,7 +602,13 @@ AFRAME.registerComponent('surge-game', {
     this.hintPanel.mesh.position.set(0, MENU_H / 2 - 824 / 800, 0.002);
     this.menuPanel.mesh.add(this.hintPanel.mesh);
     this.pausePanel = new UIPanel(PAUSE_W, PAUSE_H, 800);
-    menuAnchor.add(this.menuPanel.mesh, this.pausePanel.mesh);
+    this.helpPanel = new UIPanel(HELP_W, HELP_H, 800);
+    this.helpPanel.mesh.visible = false;
+    menuAnchor.add(this.menuPanel.mesh, this.pausePanel.mesh, this.helpPanel.mesh);
+    this.helpOpen = !this.save.seenHelp; // first time: show the controls before anything else
+    // A small "Y PAUSE" tag rides above your left glove so the pause button is never a mystery.
+    const ytag = labelSprite('Y  PAUSE', { color: '#ffffff', bg: 'rgba(8,18,31,0.6)', height: 0.045 });
+    ytag.position.set(0, 0.11, 0); this.gloveEls.left.object3D.add(ytag);
     this.scorePanel = new UIPanel(SCORE_W, SCORE_H, 1000, { onTop: true, order: 900 });
     this.$('hud').object3D.add(this.scorePanel.mesh);
     this.scorePanel.setOpacity(0);
@@ -671,6 +692,21 @@ AFRAME.registerComponent('surge-game', {
     return next;
   },
 
+  // ---------------------------------------------------------------- how to play card
+  openHelp() { this.helpOpen = true; this.helpKey = ''; this.armX = this.armY = false; this.placeMenu(this.pauseOpen); beep(600, 60, 0.06); },
+  updateHelp(inp) {
+    const panel = this.helpPanel, key = `${this.inVR}:${this.realm.id}`;
+    if (key !== this.helpKey) { this.helpKey = key; const m = { inVR: this.inVR, power: `${this.realm.powerName.toLowerCase()} (this realm)` }; panel.set((g, W, H, p) => paintHowTo(g, W, H, p, m)); }
+    panel.update();
+    const { hover, click } = this.pointAt(inp, [panel]);
+    panel.highlight(hover ? hover.btn : panel.buttons[0], '#66ffff');
+    if (click || inp.start || inp.pausePress) {
+      this.helpOpen = false; this.save.seenHelp = true; writeSave(this.save);
+      if (!this.pauseOpen) this.placeMenu(false);
+      this.armX = this.armY = false; beep(700, 60, 0.06);
+    }
+  },
+
   // ---------------------------------------------------------------- pause menu
   canPause() { return this.state !== 'ready' && this.state !== 'over'; },
   openPause() {
@@ -691,10 +727,12 @@ AFRAME.registerComponent('surge-game', {
   },
   updatePause(inp) {
     const panel = this.pausePanel;
-    const key = `${this.score.blue}:${this.score.orange}:${this.inVR}:${this.realm.id}:${this.arena.id}:${this.mode.id}`;
+    const key = `${this.score.blue}:${this.score.orange}:${this.inVR}:${this.realm.id}:${this.arena.id}:${this.mode.id}:${this.easy}`;
     if (key !== this.pauseKey) {
       this.pauseKey = key;
-      const model = { where: `${this.realm.name}  ·  ${this.arena.name}  ·  ${this.mode.name}`, blue: this.score.blue, orange: this.score.orange, inVR: this.inVR };
+      const model = { where: `${this.realm.name}  ·  ${this.arena.name}  ·  ${this.mode.name}`, blue: this.score.blue, orange: this.score.orange, inVR: this.inVR,
+                      reach: this.inVR ? `ARMS: ${this.easy ? 'EASY REACH (point + trigger)' : 'FULL MOTION (swing to throw)'}` : 'ARMS: EASY REACH (PC)',
+                      exitLabel: window.SURGE_APP ? 'QUIT SURGE LEAGUE' : 'EXIT TO HOME SCREEN' };
       panel.set((g, W, H, p) => paintPause(g, W, H, p, model));
     }
     panel.update();
@@ -706,6 +744,8 @@ AFRAME.registerComponent('surge-game', {
     const pick = click ? click.btn : inp.start ? focused : null;
     if (!pick) return;
     if (pick.id === 'resume') this.closePause();
+    else if (pick.id === 'help') this.openHelp();
+    else if (pick.id === 'reach') { if (this.inVR) { this.modeLock = this.easy ? 'full' : 'easy'; this.setEasy(this.modeLock === 'easy', 'you chose it'); } }
     else if (pick.id === 'restart') { this.closePause(true); this.newMatch(); this.startCountdown(3); }
     else if (pick.id === 'menu') { this.closePause(true); this.newMatch(); }
     else if (pick.id === 'v1') this.leaveTo('v1/');
@@ -745,6 +785,7 @@ AFRAME.registerComponent('surge-game', {
       case 'player-new': return 'Add a new player on this headset. Rename players on the 2D page.';
       case 'online': return this.save.server ? 'Look for an online match (1 vs 1). Click again to stop.' : 'Add a league server address on the 2D page to play people online.';
       case 'v1': return 'Switch to version 1, the original classic game.';
+      case 'help': return 'See every button on both controllers, and all the ways to score.';
       case 'home': return window.SURGE_APP ? 'Close Surge League.' : 'Leave Surge League and go back to the Quest Games menu.';
       case 'play': return `${this.previewRealm().name} · ${this.arena.name} · ${this.mode.name} · ${this.level.name} bots`;
     }
@@ -777,7 +818,8 @@ AFRAME.registerComponent('surge-game', {
       if (!this.save.server) this.flash('No league server set yet. Add one on the 2D page.', 2.5);
       else if (this.net.status === 'searching') this.net.unqueue();
       else this.net.queue(this.mode.id, this.arena.id, 2);
-    } else if (btn.id === 'v1') return this.leaveTo('v1/');
+    } else if (btn.id === 'help') return this.openHelp();
+    else if (btn.id === 'v1') return this.leaveTo('v1/');
     else if (btn.id === 'home') return this.exitGame();
     else if (btn.id === 'play') { this.enterPortal(); return; }
     this.save.menu = { ...this.menu }; writeSave(this.save);
@@ -809,10 +851,82 @@ AFRAME.registerComponent('surge-game', {
     }
   },
 
+  // ---------------------------------------------------------------- power-up orbs
+  buffIs(who, id) { const b = this.buffs.get(who); return !!(b && b.type.id === id); },
+  clearOrbs() { for (const o of this.orbs || []) this.el.object3D.remove(o.obj); this.orbs = []; },
+  updateOrbs(dt, live) {
+    for (const [who, b] of this.buffs) {
+      if ((b.t -= dt) > 0) continue;
+      this.buffs.delete(who);
+      if (who === 'player') this.flash(`${b.type.name} wore off`, 1.2);
+    }
+    for (const o of this.orbs) {
+      o.life -= dt;
+      o.obj.userData.core.rotation.y += dt * 1.6; o.obj.userData.ring.rotation.x += dt * 1.2;
+      o.obj.position.set(o.pos.x, o.pos.y + Math.sin(this.time * 2 + o.ph) * 0.3, o.pos.z);
+      o.obj.scale.setScalar(o.life < 2 ? Math.max(0.05, o.life / 2) : Math.min(1, (o.age = (o.age || 0) + dt) * 2));
+    }
+    this.orbs = this.orbs.filter(o => { if (o.life > 0) return true; this.el.object3D.remove(o.obj); return false; });
+    if (!live) return;
+    const elapsed = this.mode.time - this.timeLeft;
+    if (!this.orbs.length && elapsed >= this.nextOrbAt && this.timeLeft > 8) {
+      // A mirrored pair (one in each half), same power-up, away from cover and obstacles.
+      const type = POWERUPS[Math.floor(Math.random() * POWERUPS.length)];
+      let p = null;
+      for (let k = 0; k < 20 && !p; k++) {
+        const c = new T.Vector3((Math.random() < 0.5 ? -1 : 1) * (6 + Math.random() * 24), 8 + Math.random() * 18, 10 + Math.random() * 26);
+        if (this.obstacles.every(o => (o.type === 'ball' ? o.c.distanceTo(c) - o.r : o.c.distanceTo(c) - o.half.length()) > 3)) p = c;
+      }
+      if (p) for (const s of [1, -1]) {
+        const obj = buildOrb(type), pos = new T.Vector3(p.x * s, p.y, p.z * s);
+        this.el.object3D.add(obj);
+        this.orbs.push({ type, pos, obj, life: 20, ph: s });
+      }
+      this.nextOrbAt = elapsed + 12 + Math.random() * 6;
+      if (p) beepAt(1200, 200, 0.06, 'triangle', p);
+    }
+    for (const o of [...this.orbs]) for (const a of this.agents()) {
+      if (this.posOf(a).distanceTo(o.pos) > 1.9) continue;
+      this.grantBuff(a, o.type);
+      this.startBurst(o.pos, o.type.color);
+      this.el.object3D.remove(o.obj); this.orbs.splice(this.orbs.indexOf(o), 1);
+      break;
+    }
+  },
+  grantBuff(who, type) {
+    this.buffs.set(who, { type, t: type.time });
+    if (who === 'player') {
+      this.flash(`${type.name}!\n${type.hint}`, 2.6, { big: true, color: type.color });
+      beep(880, 100, 0.1, 'triangle'); beep(1320, 200, 0.1, 'triangle', 0.1);
+      for (const h of this.hands || []) pulse(h, 0.7, 120);
+    } else {
+      beepAt(660, 160, 0.08, 'triangle', who.pos);
+      if (who.pos.distanceTo(this.headPos) < 35) this.flash(`${who.label} grabbed ${type.name}`, 1.4, { color: type.color });
+    }
+  },
+
+  // ---------------------------------------------------------------- streaks: two goals in a row sets a team on fire (+1 per goal until the other team scores)
+  scoreStreak(team) {
+    if (this.streak.team === team) this.streak.n++; else this.streak = { team, n: 1 };
+    if (this.onFire && this.onFire !== team) { this.onFire = null; this.flash(`${OTHER[team] === 'blue' ? 'YOUR' : 'ORANGE\'S'} FIRE IS OUT`, 1.5); }
+    if (this.streak.n === 2 && this.onFire !== team) {
+      this.onFire = team;
+      setTimeout(() => this.flash(team === 'blue' ? 'BLUE IS ON FIRE!  +1 every goal' : 'ORANGE IS ON FIRE!  Stop them!', 2.5, { big: true, color: '#ff8a1f' }), 2300);
+    }
+  },
+
   // ---------------------------------------------------------------- surge events
   updateSurges(dt) {
     if (this.state !== 'playing') return;
     const elapsed = this.mode.time - this.timeLeft;
+    // Final Surge: the last 30 seconds count double (not in practice).
+    if (!this.finalSurgeOn && this.mode.bots && this.timeLeft <= FINAL_SURGE_AT && !this.mode.core) {
+      this.finalSurgeOn = true;
+      this.flash('FINAL SURGE!\nEvery point counts double', 3, { big: true, color: '#ff4fd8' });
+      this.scoreShowT = 3.5;
+      beep(330, 200, 0.12, 'sawtooth'); beep(440, 200, 0.12, 'sawtooth', 0.18); beep(660, 500, 0.12, 'sawtooth', 0.36);
+      for (const h of this.hands || []) pulse(h, 0.8, 200);
+    }
     if (this.surge) {
       this.surge.left -= dt;
       if (this.surge.left <= 0) this.endSurge();
@@ -892,7 +1006,7 @@ AFRAME.registerComponent('surge-game', {
     } else if (realm.power === 'shockwave' || realm.power === 'gust') {
       const gust = realm.power === 'gust', dir = this.facingOf(user);
       for (const target of this.agents()) {
-        if (this.teamOf(target) === team) continue;
+        if (this.teamOf(target) === team || this.buffIs(target, 'shield')) continue;
         const away = tmp3.subVectors(this.posOf(target), pos), dist = away.length();
         if (dist > (gust ? GUST_RANGE : SHOCK_R) || dist < 1e-3) continue;
         away.normalize();
@@ -925,8 +1039,8 @@ AFRAME.registerComponent('surge-game', {
     for (const u of this.styleUpdates) u(dt, this.time);
     this.hazard.update(dt, this.time, wild, this);
     if (this.live) {
-      this.hazard.body(this.headPos, this.vel, dt, this);
-      for (const b of this.activeBots) this.hazard.body(b.pos, b.vel, dt, null);
+      this.hazard.body(this.headPos, this.vel, dt, this, 'player');
+      for (const b of this.activeBots) this.hazard.body(b.pos, b.vel, dt, null, b);
     }
     // Hoop Shift surge: every hoop slides side to side together (both ends move the same way, so it stays fair).
     const shift = this.surge && this.surge.ev.id === 'shift' ? Math.sin((this.time - this.surge.start) * 0.8) * 7 * Math.min(1, this.surge.left / 1.5) : 0;
@@ -1002,13 +1116,19 @@ AFRAME.registerComponent('surge-game', {
         beep(160, 300, 0.1, 'sawtooth');
       }
       this.boosting = this.boostT > 0;
-      const speedMul = slip ? 2 : 1;
+      const speedMul = (slip ? 2 : 1) * (this.buffIs('player', 'speed') ? 1.7 : 1);
       if (!live) this.vel.multiplyScalar(Math.exp(-3 * dt));
       else if (this.easy) {
-        const target = this.boosting ? this.boostDir.clone().multiplyScalar(BOOST_MAX * 0.8) : thrust.clone().multiplyScalar(EASY_SPEED * speedMul);
         const flow = currentAt(this.winds, this.headPos);
-        if (flow) target.z += flow * CURRENT_SPEED * 0.6;
-        this.vel.lerp(target, 1 - Math.exp(-EASY_RESPONSE * dt));
+        if (!this.boosting && thrust.lengthSq() < 0.0025) {
+          // Let go of the stick: you keep gliding and slow down gently, like coasting on ice (stops after a couple of seconds).
+          this.vel.multiplyScalar(Math.exp(-1.1 * dt));
+          if (flow && this.vel.z * flow < CURRENT_SPEED * 0.6) this.vel.z += flow * CURRENT_ACCEL * 0.5 * dt;
+        } else {
+          const target = this.boosting ? this.boostDir.clone().multiplyScalar(BOOST_MAX * 0.8) : thrust.clone().multiplyScalar(EASY_SPEED * speedMul);
+          if (flow) target.z += flow * CURRENT_SPEED * 0.6;
+          this.vel.lerp(target, 1 - Math.exp(-EASY_RESPONSE * dt));
+        }
       } else {
         this.vel.addScaledVector(thrust, THRUST * (slip ? 1.6 : 1) * dt);
         applyCurrent(this.winds, this.headPos, this.vel, dt);
@@ -1059,7 +1179,7 @@ AFRAME.registerComponent('surge-game', {
   catchDisc(h, msg) {
     const d = this.disc;
     if (msg === 'STOLE IT!') this.stats.steals++;
-    Object.assign(d, { holder: 'player', hand: h.side, pulledBy: null, snapping: false, tractor: null, passTo: null, lastThrower: 'player', holdT: 0, curve: 0 });
+    Object.assign(d, { holder: 'player', hand: h.side, pulledBy: null, snapping: false, tractor: null, passTo: null, lastThrower: 'player', holdT: 0, curve: 0, mega: false });
     d.vel.set(0, 0, 0);
     this.playerGrace = GRACE;
     if (!h.desktop) this.track[h.side].glove.length = 0;
@@ -1069,12 +1189,14 @@ AFRAME.registerComponent('surge-game', {
   botTakes(b) {
     const d = this.disc;
     if (d.passTo === b && d.lastThrower === 'player') this.stats.passes++;
-    Object.assign(d, { holder: b, hand: null, pulledBy: null, snapping: false, tractor: null, passTo: null, lastThrower: b, holdT: 0, curve: 0 });
+    Object.assign(d, { holder: b, hand: null, pulledBy: null, snapping: false, tractor: null, passTo: null, lastThrower: b, holdT: 0, curve: 0, mega: false });
+    b.dunker = Math.random() < 0.4; // some possessions, the bot tries to fly it in for a dunk
     d.vel.set(0, 0, 0);
     b.grace = GRACE;
   },
   releaseDisc(v, h, curve = 0) {
     const d = this.disc;
+    if (this.buffIs('player', 'mega')) { v.multiplyScalar(1.4); this.disc.mega = true; this.buffs.delete('player'); this.flash('MEGA THROW!', 1, { color: '#ff8a1f' }); }
     if (v.length() > this.discMax()) v.setLength(this.discMax());
     d.vel.copy(v);
     Object.assign(d, { holder: null, hand: null, pulledBy: null, snapping: false, noCatch: 0.3, lastThrower: 'player', holdT: 0, passTo: null, bankT: -99,
@@ -1112,7 +1234,7 @@ AFRAME.registerComponent('surge-game', {
     if (d.passTo) { d.passT -= dt; if (d.passT <= 0) d.passTo = null; }
     if (d.away > 0) { d.away -= dt; if (d.away <= 0) this.respawnNearPlayer(); this.beams.pull.visible = false; return; }
     let pullBeam = null;
-    const mitt = this.mittOn('player'), grabR = GRAB_R * (mitt ? 3 : 1), snapR = SNAP_R * (mitt ? 2.2 : 1);
+    const mitt = this.mittOn('player') || this.buffIs('player', 'magnet'), grabR = GRAB_R * (mitt ? 3 : 1), snapR = SNAP_R * (mitt ? 2.2 : 1);
     const holdLimit = this.mode.core ? 10 : HOLD_LIMIT;
     if (live && d.holder) {
       const before = Math.floor(d.holdT);
@@ -1145,6 +1267,7 @@ AFRAME.registerComponent('surge-game', {
           if (!grabbing || !near) continue;
           if (bot.team === 'blue') this.catchDisc(h, 'HANDOFF');
           else if (bot.grace > 0) continue;
+          else if (this.buffIs(bot, 'shield')) { if (!this.behindWarnT || this.time > this.behindWarnT) { this.flash('SHIELDED! Wait it out or tackle later.', 1.4); this.behindWarnT = this.time + 1.5; } }
           else if (this.fromFrontOrSide(bot, h.glove)) { bot.stun = 1.5; this.catchDisc(h, 'STOLE IT!'); }
           else if (!this.behindWarnT || this.time > this.behindWarnT) { this.flash('Not from behind! Cut in front.'); this.behindWarnT = this.time + 1.5; }
         }
@@ -1179,14 +1302,40 @@ AFRAME.registerComponent('surge-game', {
             if (dist < grabR + DISC_R) this.catchDisc(h, 'GOT IT');
           }
         }
+        // MAGNET power-up: a loose disc within 12 m flies to your nearest hand.
+        if (d.holder === null && this.buffIs('player', 'magnet') && d.noCatch === 0 && this.playerStun === 0 && hands.length) {
+          const h = hands.reduce((a, b) => a.glove.distanceTo(d.pos) < b.glove.distanceTo(d.pos) ? a : b), dist = h.glove.distanceTo(d.pos);
+          if (dist < 12) {
+            d.vel.lerp(tmp.subVectors(h.glove, d.pos).setLength(PULL_SPEED * 1.4), 1 - Math.exp(-6 * dt));
+            if (dist < grabR + DISC_R + 0.3) this.catchDisc(h, 'MAGNET!');
+          }
+        }
         if (d.holder === null && d.tractor) this.updateTractor(dt, hands);
       }
       if (d.holder === null) this.flyDisc(dt);
     }
     if (d.holder && d.holder !== 'player') { d.pos.copy(d.holder.pos).addScaledVector(d.holder.facing, 1.1); d.quat.identity(); }
+    if (live && d.holder) this.checkDunk(); else this.dunkPrev = null;
     if (pullBeam && d.holder === null) this.setBeam(this.beams.pull, pullBeam.glove, d.pos);
     else if (d.tractor && d.holder === null) this.setBeam(this.beams.pull, d.tractor === 'player' ? this.headPos.clone().add(new T.Vector3(0, -0.5, 0)) : d.tractor.pos, d.pos);
     else this.beams.pull.visible = false;
+  },
+
+  // Dunk: carry the disc through a rival hoop yourself (hand or body) instead of throwing it.
+  checkDunk() {
+    const d = this.disc, holder = d.holder, prev = this.dunkPrev;
+    this.dunkPrev = { holder, pos: d.pos.clone() };
+    if (!prev || prev.holder !== holder || prev.pos.distanceTo(d.pos) > 6) return;
+    const team = this.teamOf(holder);
+    for (const h of this.hoops) {
+      if (h.team === team) continue;
+      const d0 = tmp.subVectors(prev.pos, h.c).dot(h.n), d1 = tmp.subVectors(d.pos, h.c).dot(h.n);
+      if (!(d0 > 0 && d1 <= 0)) continue;
+      tmp.lerpVectors(prev.pos, d.pos, d0 / (d0 - d1));
+      if (tmp.distanceTo(h.c) > h.size + 0.25) continue;
+      d.lastThrower = holder; this.dunkPrev = null;
+      return this.goal(h, true);
+    }
   },
 
   updateTractor(dt, hands) {
@@ -1202,7 +1351,7 @@ AFRAME.registerComponent('surge-game', {
     }
   },
 
-  discMax() { return DISC_MAX * (this.surgeIs('turbo') ? 1.35 : 1); },
+  discMax() { return DISC_MAX * (this.surgeIs('turbo') ? 1.35 : 1) * (this.disc.mega ? 1.4 : 1); },
   flyDisc(dt) {
     const d = this.disc, hit = {}, turbo = this.surgeIs('turbo');
     d.vel.multiplyScalar(Math.exp(-DISC_DRAG * (turbo ? 0.4 : 1) * dt));
@@ -1222,7 +1371,7 @@ AFRAME.registerComponent('surge-game', {
         const d0 = tmp.subVectors(prev, h.c).dot(h.n), d1 = tmp.subVectors(d.pos, h.c).dot(h.n);
         if (d0 > 0 && d1 <= 0) { tmp.lerpVectors(prev, d.pos, d0 / (d0 - d1)); if (tmp.distanceTo(h.c) < h.size - DISC_R * 0.5) return this.goal(h); }
       }
-      if (this.realm.id === 'gym' && this.checkDodgeballHit()) break;
+      if ((this.realm.id === 'gym' || d.mega) && this.checkDodgeballHit()) break;
       this.hazard.disc(d, sdt, this, prev);
       hit.obstacle = null;
       const impact = resolveSphere(d.pos, d.vel, DISC_R, turbo ? 0.95 : BOUNCE_DISC, this.obstacles, hit);
@@ -1270,7 +1419,7 @@ AFRAME.registerComponent('surge-game', {
     if (!d.lastThrower || d.hitCool > 0 || d.passTo || d.vel.length() < HIT_SPEED) return false;
     const throwerTeam = this.teamOf(d.lastThrower);
     for (const target of this.agents()) {
-      if (this.teamOf(target) === throwerTeam || this.mittOn(target)) continue;
+      if (this.teamOf(target) === throwerTeam || this.mittOn(target) || this.buffIs(target, 'shield')) continue;
       const tp = this.posOf(target);
       if (tp.distanceTo(d.pos) > (target === 'player' ? 1.0 : BOT_R + DISC_R + 0.2)) continue;
       reflect(d.vel, tmp3.subVectors(d.pos, tp).normalize(), 0.5);
@@ -1283,21 +1432,27 @@ AFRAME.registerComponent('surge-game', {
     return false;
   },
 
-  goal(h) {
+  // Points multiplier from surges: Double Points and the Final Surge (last 30 seconds) stack.
+  pointsMul() { return (this.surgeIs('double') ? 2 : 1) * (this.finalSurgeOn ? 2 : 1); },
+  goal(h, dunk = false) {
     const d = this.disc;
     if (!d.lastThrower) return;
-    const team = OTHER[h.team], trick = this.time - d.bankT < TRICK_WINDOW, golden = this.surgeIs('golden') && h.idx === this.surge.hoop;
-    const pts = (h.pts * (trick ? 2 : 1) + (golden ? 3 : 0)) * (this.surgeIs('double') ? 2 : 1);
+    const team = OTHER[h.team], trick = !dunk && this.time - d.bankT < TRICK_WINDOW, golden = this.surgeIs('golden') && h.idx === this.surge.hoop;
+    const fire = this.onFire === team;
+    const pts = (h.pts * (trick ? 2 : 1) + (golden ? 3 : 0) + (dunk ? DUNK_BONUS : 0) + (fire ? FIRE_BONUS : 0)) * this.pointsMul();
     this.scoreShowT = 4;
     h.flash = 1;
-    this.startBurst(h.c, trick ? '#d9c3ff' : TEAM_COLOR[team]);
+    this.startBurst(h.c, dunk ? '#ffffff' : trick ? '#d9c3ff' : TEAM_COLOR[team]);
     d.vel.set(0, 0, 0);
-    Object.assign(d, { holder: null, pulledBy: null, tractor: null, passTo: null, bankT: -99 });
+    Object.assign(d, { holder: null, hand: null, pulledBy: null, tractor: null, passTo: null, bankT: -99, mega: false });
     this.score[team] += pts;
-    if (d.lastThrower === 'player') { this.stats.goals++; if (trick) this.stats.tricks++; }
+    if (d.lastThrower === 'player') { this.stats.goals++; if (trick) this.stats.tricks++; if (dunk) this.stats.dunks = (this.stats.dunks || 0) + 1; }
+    this.scoreStreak(team);
     const who = d.lastThrower === 'player' ? 'YOU' : team === 'blue' ? 'YOUR ALLY' : 'ORANGE';
-    this.flash(`${trick ? 'TRICK SHOT! ' : ''}${golden ? 'GOLDEN! ' : ''}${who} SCORED +${pts}${team === 'blue' ? '!' : ''}`, 2, { big: true, color: team === 'blue' ? '#8fc2ff' : '#ffb183' });
-    if (team === 'blue') { beep(660, 120, 0.12); beep(880, 120, 0.12, 'sine', 0.1); beep(1320, 260, 0.12, 'sine', 0.2); if (trick) beep(1760, 400, 0.1, 'sine', 0.35); for (const hand of this.hands) pulse(hand, 1, 150); }
+    const how = dunk ? 'SLAM DUNK! ' : trick ? 'TRICK SHOT! ' : '';
+    this.flash(`${how}${golden ? 'GOLDEN! ' : ''}${fire ? 'ON FIRE! ' : ''}${who} SCORED +${pts}${team === 'blue' ? '!' : ''}`, 2.2, { big: true, color: team === 'blue' ? '#8fc2ff' : '#ffb183' });
+    if (dunk) { beepAt(90, 500, 0.2, 'square', h.c); noiseAt(500, 0.15, h.c, [2000, 300]); }
+    if (team === 'blue') { beep(660, 120, 0.12); beep(880, 120, 0.12, 'sine', 0.1); beep(1320, 260, 0.12, 'sine', 0.2); if (trick || dunk) beep(1760, 400, 0.1, 'sine', 0.35); for (const hand of this.hands) pulse(hand, 1, dunk ? 300 : 150); }
     else { beep(300, 200, 0.12, 'sawtooth'); beep(200, 300, 0.12, 'sawtooth', 0.2); }
     if (this.activeBots.length) { this.state = 'scored'; this.stateT = 1.5; }
     else d.away = 1; // practice: the disc comes back right in front of you
@@ -1321,7 +1476,7 @@ AFRAME.registerComponent('surge-game', {
     if (this.coreT < CORE_TICK) return;
     this.coreT -= CORE_TICK;
     const team = this.teamOf(d.holder);
-    this.score[team] += this.surgeIs('double') ? 2 : 1;
+    this.score[team] += this.pointsMul();
     beep(team === 'blue' ? 990 : 330, 70, 0.07);
     if (this.score[team] >= this.mode.target) { this.timeLeft = 0; this.endMatch(); }
   },
@@ -1363,7 +1518,7 @@ AFRAME.registerComponent('surge-game', {
   catchSnitch(team, h, byPlayer) {
     this.startBurst(this.snitch.pos, '#ffd23d');
     this.snitch.active = false;
-    this.score[team] += SNITCH_POINTS * (this.surgeIs('double') ? 2 : 1);
+    this.score[team] += SNITCH_POINTS * this.pointsMul();
     this.scoreShowT = 4;
     if (byPlayer) this.stats.snitch++;
     if (team === 'blue') { this.flash(`${byPlayer ? 'YOU' : 'YOUR ALLY'} CAUGHT THE SNITCH! +${SNITCH_POINTS}`, 2.5); pulse(h, 1, 250); beep(880, 100, 0.12); beep(1320, 100, 0.12, 'sine', 0.1); beep(1760, 300, 0.12, 'sine', 0.2); }
@@ -1427,7 +1582,7 @@ AFRAME.registerComponent('surge-game', {
       else goal = core ? this.core.position.clone().add(new T.Vector3(0, 0, OWN_Z[b.team] * 0.15)) : new T.Vector3(Math.max(-14, Math.min(14, d.pos.x)), 16, OWN_Z[b.team] - Math.sign(OWN_Z[b.team]) * 9);
       if (!goal) continue;
 
-      const speed = b.stun > 0 ? 0 : botSpeed * (this.slipOn(b) ? 1.8 : 1);
+      const speed = b.stun > 0 ? 0 : botSpeed * (this.slipOn(b) ? 1.8 : 1) * (this.buffIs(b, 'speed') ? 1.6 : 1);
       tmp.subVectors(goal, b.pos);
       const dist = tmp.length();
       const desired = dist > 0.01 ? tmp.multiplyScalar(Math.min(speed, dist * 2) / dist) : tmp.set(0, 0, 0);
@@ -1439,11 +1594,11 @@ AFRAME.registerComponent('surge-game', {
       if (resolveSphere(b.pos, b.vel, BOT_R, BOUNCE_BOT, this.obstacles) > 0.5) b.vel.add(new T.Vector3(Math.random() - 0.5, Math.random() - 0.5, Math.random() - 0.5).multiplyScalar(6));
       if (b.vel.lengthSq() > 0.25) b.facing.copy(b.vel).normalize();
 
-      const catchR = (d.passTo === b ? BOT_CATCH_R + 1 : BOT_CATCH_R) * (this.mittOn(b) ? 2.5 : 1);
+      const catchR = (d.passTo === b ? BOT_CATCH_R + 1 : BOT_CATCH_R) * (this.mittOn(b) || this.buffIs(b, 'magnet') ? 2.5 : 1);
       if (d.holder === null && d.away <= 0 && b.cool === 0 && b.stun === 0 && b.pos.distanceTo(d.pos) < catchR + DISC_R) { this.botTakes(b); beep(330, 100, 0.08); }
       else if (d.holder && d.holder !== b && this.teamOf(d.holder) !== b.team && b.stun === 0) {
         const graceOk = d.holder === 'player' ? this.playerGrace === 0 : !(d.holder.grace > 0);
-        if (graceOk && b.pos.distanceTo(this.posOf(d.holder)) < STEAL_R * this.level.steal && this.fromFrontOrSide(d.holder, b.pos)) {
+        if (graceOk && !this.buffIs(d.holder, 'shield') && b.pos.distanceTo(this.posOf(d.holder)) < STEAL_R * this.level.steal && this.fromFrontOrSide(d.holder, b.pos)) {
           const victim = d.holder;
           this.botTakes(b);
           if (victim === 'player') { this.playerStun = 1; this.flash('STOLEN!'); for (const h of this.hands) pulse(h, 1, 200); } else victim.stun = 1.5;
@@ -1473,6 +1628,8 @@ AFRAME.registerComponent('surge-game', {
     const lined = toHoop.length() < BOT_SHOOT && toHoop.dot(pick.n) < -0.75 * toHoop.length();
     const pressured = this.agents().some(e => this.teamOf(e) !== b.team && this.posOf(e).distanceTo(b.pos) < 6);
     const mate = (pressured || d.holdT > 4) ? this.passTarget(b) : null;
+    // Dunk run: some possessions the bot flies straight through the hoop instead of shooting.
+    if (b.dunker && !pressured && d.holdT < 6.5 && toHoop.length() < 22 && toHoop.dot(pick.n) < -0.6 * toHoop.length()) return pick.c.clone().addScaledVector(pick.n, -5);
     if (prism && b.pos.distanceTo(prism.L) < 3) this.botShoot(b, prism.P, 0.6);
     else if (b.pos.distanceTo(front) < 3.5 || lined || (d.holdT > 6.5 && toHoop.dot(pick.n) < 0)) this.botShoot(b, pick.c, pick.size * 1.3);
     else if (mate) this.passFrom(b, mate);
@@ -1482,7 +1639,8 @@ AFRAME.registerComponent('surge-game', {
   botShoot(b, target, spread) {
     const d = this.disc;
     const aim = target.clone().add(new T.Vector3(Math.random() - 0.5, Math.random() - 0.5, Math.random() - 0.5).multiplyScalar(spread * this.level.aim));
-    d.vel.copy(aim.sub(d.pos)).setLength(BOT_THROW);
+    d.vel.copy(aim.sub(d.pos)).setLength(BOT_THROW * (this.buffIs(b, 'mega') ? 1.4 : 1));
+    if (this.buffIs(b, 'mega')) { d.mega = true; this.buffs.delete(b); }
     Object.assign(d, { holder: null, lastThrower: b, spin: 20, noCatch: 0, holdT: 0, passTo: null, curve: 0, bankT: -99 });
     b.cool = 0.8;
     beep(260, 120, 0.08, 'square');
@@ -1493,6 +1651,7 @@ AFRAME.registerComponent('surge-game', {
     const bodies = [{ who: 'player', pos: this.headPos, vel: this.vel, r: 0.7 }, ...this.activeBots.map(b => ({ who: b, pos: b.pos, vel: b.vel, r: BOT_R }))];
     for (let i = 0; i < bodies.length; i++) for (let j = i + 1; j < bodies.length; j++) {
       const a = bodies[i], b = bodies[j], n = tmp3.subVectors(a.pos, b.pos), dist = n.length(), min = a.r + b.r;
+      if (dist < min + 0.8 && dist > 1e-4) this.tryTackle(a, b, n.clone().divideScalar(dist));
       if (dist >= min || dist < 1e-4) continue;
       n.divideScalar(dist);
       const push = (min - dist) / 2;
@@ -1505,16 +1664,44 @@ AFRAME.registerComponent('surge-game', {
     }
   },
 
+  // Tackle: slam into a rival carrying the disc fast enough (a boost does it) and the disc flies loose, from any side.
+  tryTackle(a, b, n) {
+    const d = this.disc, closing = -tmp2.subVectors(a.vel, b.vel).dot(n);
+    if (closing < TACKLE_SPEED || !d.holder) return;
+    const [carrier, hitter] = d.holder === a.who ? [a, b] : d.holder === b.who ? [b, a] : [null, null];
+    if (!carrier || this.teamOf(carrier.who) === this.teamOf(hitter.who) || this.buffIs(carrier.who, 'shield')) return;
+    if (hitter.who !== 'player' && hitter.who.cool > 0) return;
+    Object.assign(d, { holder: null, hand: null, holdT: 0, noCatch: 0.35, lastThrower: hitter.who, passTo: null });
+    d.vel.copy(hitter.vel).multiplyScalar(0.6).add(new T.Vector3((Math.random() - 0.5) * 6, 5, (Math.random() - 0.5) * 6));
+    if (carrier.who === 'player') { this.playerStun = 1; this.flash('TACKLED!', 1.2, { color: '#ffb183' }); for (const h of this.hands) pulse(h, 1, 220); }
+    else { carrier.who.stun = 1.3; carrier.who.cool = 1; }
+    if (hitter.who === 'player') { this.flash('TACKLE!', 1.2, { big: true, color: '#66ffff' }); this.stats.steals++; for (const h of this.hands) pulse(h, 0.9, 160); }
+    else hitter.who.cool = 2;
+    this.startBurst(d.pos, '#ffffff');
+    beepAt(90, 300, 0.18, 'square', d.pos); noiseAt(300, 0.12, d.pos, [1500, 200]);
+  },
+
+  // Rider goes through a portal (Moon Castle): move the whole rig, with a quick violet flash.
+  teleportPlayer(offset) {
+    this.rig.position.add(offset); this.headPos.add(offset);
+    this.portalFlash = 1;
+    for (const h of this.hands || []) pulse(h, 0.6, 120);
+  },
+
   // ---------------------------------------------------------------- coaching, sound, online
   tip(id) {
     if (this.save.tips.includes(id) || this.msgT > 0 || this.tipGap > 0) return;
     this.save.tips.push(id); writeSave(this.save);
     const text = TIPS[id][this.inVR ? 0 : 1];
-    if (text) { this.flash(text, 3.5); this.tipGap = 4.5; }
+    const hint = this.inVR ? TIP_HINTS[id.startsWith('power-') ? 'power' : id] : null;
+    if (text) { this.flash(text, 4, { hint }); this.tipGap = 4.5; }
   },
   coach(inp, dt) {
     this.tipGap = Math.max(0, this.tipGap - dt);
     const d = this.disc, playing = this.mode.time - this.timeLeft;
+    if (playing > 6) this.tip('pause');
+    if (d.holder === 'player' && this.hoops.some(h => h.team === 'orange' && h.c.distanceTo(this.headPos) < 25)) this.tip('dunk');
+    if (this.orbs.some(o => o.pos.distanceTo(this.headPos) < 30)) this.tip('orb');
     if (this.mode.core) this.tip('core');
     if (this.prisms.length) this.tip('prism');
     if (playing > 3) this.tip('boost');
@@ -1609,15 +1796,17 @@ AFRAME.registerComponent('surge-game', {
       for (const m of r.mats) m.opacity = a;
       if (r.squashT > 0) { r.squashT = Math.max(0, r.squashT - dt * 3); const k = Math.sin(r.squashT * Math.PI * 3) * 0.12 * r.squashT; r.mesh.scale.set(1 + k, 1 - k, 1 + k); }
     }
-    // Rider trails
+    // Rider trails and glows (a bot's glow takes its power-up's color)
     for (const b of this.activeBots) {
+      const buff = this.buffs.get(b), hc = buff ? buff.type.color : this.onFire === b.team ? '#ff8a1f' : b.col;
+      if (b.haloC !== hc) { b.haloC = hc; b.halo.material.color.set(hc); b.halo.scale.setScalar(hc === b.col ? 2.6 : 4); }
       const tp = b.trail.geometry.attributes.position;
       if ((b.trailT = (b.trailT || 0) + dt) > 0.05) {
         b.trailT = 0;
         for (let i = tp.count - 1; i > 0; i--) tp.setXYZ(i, tp.getX(i - 1), tp.getY(i - 1), tp.getZ(i - 1));
       }
       tp.setXYZ(0, b.pos.x, b.pos.y + 0.4, b.pos.z);
-      if (!b.trailInit) { b.trailInit = true; for (let i = 1; i < tp.count; i++) tp.setXYZ(i, b.pos.x, b.pos.y + 0.4, b.pos.z); }
+      if (!b.trailInit || Math.hypot(tp.getX(1) - b.pos.x, tp.getZ(1) - b.pos.z) > 8) { b.trailInit = true; for (let i = 1; i < tp.count; i++) tp.setXYZ(i, b.pos.x, b.pos.y + 0.4, b.pos.z); }
       tp.needsUpdate = true;
     }
     for (const p of this.prisms) p.plate.material.emissiveIntensity = 0.35 + Math.max(0, 1 - (this.time - this.disc.bankT)) * 1.5;
@@ -1654,7 +1843,9 @@ AFRAME.registerComponent('surge-game', {
     const inCloud = this.hazard.inside && this.hazard.inside(this.headPos), fadeM = this.fadeMat();
     if (fadeM && this.state !== 'portal') {
       this.cloudFog = (this.cloudFog || 0) + ((inCloud ? 0.55 : 0) - (this.cloudFog || 0)) * Math.min(1, dt * 4);
-      fadeM.color.set('#eef4fb'); fadeM.opacity = this.cloudFog;
+      this.portalFlash = Math.max(0, this.portalFlash - dt * 3);
+      if (this.portalFlash * 0.7 > this.cloudFog) { fadeM.color.set('#b49cff'); fadeM.opacity = this.portalFlash * 0.7; }
+      else { fadeM.color.set('#eef4fb'); fadeM.opacity = this.cloudFog; }
     } else if (fadeM && this.state === 'portal') fadeM.color.set(this.nextRealm ? this.nextRealm.fog : '#000');
 
     if (this.shockT > 0) { const sc = 0.5 + (1 - this.shockT / 0.45) * SHOCK_R; this.shock.visible = true; this.shock.scale.set(sc, sc, sc); } else this.shock.visible = false;
@@ -1684,6 +1875,8 @@ AFRAME.registerComponent('surge-game', {
       if (!h) { arm.visible = false; aim.visible = false; continue; }
       gloveObj.position.copy(this.rig.worldToLocal(h.glove.clone()));
       gloveObj.scale.setScalar(this.mittOn('player') ? 2.2 : 1);
+      const gm = this.gloveEls[side].getObject3D('mesh'), buff = this.buffs.get('player'), gc = buff ? buff.type.color : this.onFire === 'blue' ? '#ff8a1f' : '#66ffff';
+      if (gm && gm.userData.c !== gc) { gm.userData.c = gc; gm.material.color.set(gc); gm.material.emissive.set(gc); }
       this.setBeam(arm, h.shoulder, h.glove);
       if (this.easy) this.setBeam(aim, h.glove, h.glove.clone().addScaledVector(h.dir, 15)); else aim.visible = false;
     }
@@ -1726,7 +1919,8 @@ AFRAME.registerComponent('surge-game', {
       blue: this.score.blue, orange: this.score.orange, clock: `${m}:${sec}`, clockWarn: this.timeLeft < 10,
       mode: this.mode.core ? `${this.mode.name} · FIRST TO ${this.mode.target}` : this.mode.name, realm: `${this.realm.name}${this.snitch.active ? ' · SNITCH OUT' : ''}`,
       power: `${this.inVR ? 'B' : 'C'}: ${this.realm.powerName} ${pw.t > 0 ? 'ACTIVE' : pw.cool > 0 ? Math.ceil(pw.cool) + 's' : 'READY'}`, powerReady: pw.cool === 0,
-      event: this.surge ? `${this.surge.ev.name} ${Math.ceil(this.surge.left)}s` : ''
+      event: this.surge ? `${this.surge.ev.name} ${Math.ceil(this.surge.left)}s` : this.finalSurgeOn ? 'FINAL SURGE x2' : this.buffs.get('player') ? `${this.buffs.get('player').type.name} ${Math.ceil(this.buffs.get('player').t)}s`
+           : this.onFire ? `${this.onFire === 'blue' ? 'BLUE' : 'ORANGE'} ON FIRE` : ''
     };
     const key = JSON.stringify(sb);
     if (this.scoreAlpha > 0.01 && key !== this.scoreKey) { this.scoreKey = key; this.scorePanel.set((g, W, H, p) => paintScoreboard(g, W, H, p, sb)); }
@@ -1736,9 +1930,8 @@ AFRAME.registerComponent('surge-game', {
     let text = '', opts = this.msgOpts || {};
     if (this.msgT > 0 && !inMenu) text = this.msg;
     else if (this.state === 'playing' && this.disc.holder === 'player' && this.disc.holdT > (this.mode.core ? 7 : 4)) { text = `THROW IN ${Math.ceil((this.mode.core ? 10 : HOLD_LIMIT) - this.disc.holdT)}`; opts = { color: '#ffd166' }; }
-    else if (this.inVR && this.yHold > 0.4 && this.state !== 'ready') { text = 'Keep holding Y for the menu...'; opts = {}; }
-    const tkey = text + '|' + (opts.big ? 1 : 0) + (opts.color || '');
-    if (text && tkey !== this.toastKey) { this.toastKey = tkey; const t = { text, big: opts.big, color: opts.color }; this.toastPanel.set((g, W, H, p) => paintToast(g, W, H, p, t)); }
+    const tkey = text + '|' + (opts.big ? 1 : 0) + (opts.color || '') + (opts.hint ? opts.hint.side + opts.hint.part : '');
+    if (text && tkey !== this.toastKey) { this.toastKey = tkey; const t = { text, big: opts.big, color: opts.color, hint: opts.hint }; this.toastPanel.set((g, W, H, p) => paintToast(g, W, H, p, t)); }
     this.toastAlpha += ((text && this.state !== 'portal' ? 1 : 0) - this.toastAlpha) * Math.min(1, dt * (text ? 14 : 5));
     this.toastPanel.setOpacity(this.toastAlpha);
     this.toastPanel.update();

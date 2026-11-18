@@ -158,6 +158,108 @@ function glowSprite(color, size, opacity = 0.8) {
   return s;
 }
 
+// ------------------------------------------------------------------ Quest controller diagram
+// Draws a Touch controller seen from above at (cx, top), s = height in px. side 'left' | 'right'.
+// lit: a set of parts to glow ('stick', 'x', 'y', 'a', 'b', 'grip', 'trigger'). Returns where each part is (for callout lines).
+function paintController(g, cx, top, s, side, lit = new Set(), pulse = 1) {
+  const m = side === 'left' ? -1 : 1, P = (x, y) => [cx + x * s * m, top + y * s];
+  const glow = (on, base) => on ? '#66ffff' : base;
+  const parts = {};
+  g.save();
+  const lightUp = on => { if (on) { g.shadowColor = '#66ffff'; g.shadowBlur = 28 * pulse; } };
+  // Trigger and grip stick out on the inner side (the side facing your other hand)
+  const trig = lit.has('trigger'), grip = lit.has('grip');
+  lightUp(trig); g.fillStyle = glow(trig, '#566175');
+  g.save(); g.translate(...P(-0.27, 0.2)); g.rotate(-0.5 * m); rrect(g, -s * 0.05, -s * 0.09, s * 0.1, s * 0.18, s * 0.05); g.fill(); g.restore();
+  noShadow(g); parts.trigger = P(-0.3, 0.2);
+  lightUp(grip); g.fillStyle = glow(grip, '#566175');
+  g.save(); g.translate(...P(-0.2, 0.62)); g.rotate(0.12 * -m); rrect(g, -s * 0.045, -s * 0.16, s * 0.09, s * 0.32, s * 0.045); g.fill(); g.restore();
+  noShadow(g); parts.grip = P(-0.23, 0.62);
+  // Handle and face
+  g.fillStyle = '#2b313c';
+  g.beginPath();
+  g.moveTo(...P(-0.24, 0.12)); g.quadraticCurveTo(...P(-0.27, 0.42), ...P(-0.16, 0.52));
+  g.lineTo(...P(-0.12, 0.98)); g.quadraticCurveTo(...P(0, 1.04), ...P(0.12, 0.98));
+  g.lineTo(...P(0.16, 0.52)); g.quadraticCurveTo(...P(0.27, 0.42), ...P(0.24, 0.12));
+  g.quadraticCurveTo(...P(0, -0.02), ...P(-0.24, 0.12));
+  g.fill();
+  // Tracking ring
+  g.strokeStyle = '#444d5e'; g.lineWidth = s * 0.07;
+  g.beginPath(); g.arc(...P(0, -0.2), s * 0.27, 0, Math.PI * 2); g.stroke();
+  // Face: thumbstick and two buttons (left: X lower, Y upper; right: A lower, B upper)
+  const btn = (id, x, y, r, label) => {
+    const on = lit.has(id);
+    lightUp(on);
+    g.fillStyle = glow(on, '#141920'); g.beginPath(); g.arc(...P(x, y), s * r, 0, Math.PI * 2); g.fill(); noShadow(g);
+    g.strokeStyle = on ? '#e9ffff' : '#6b7690'; g.lineWidth = s * 0.012; g.stroke();
+    if (label) { g.fillStyle = on ? '#04121f' : '#e3eaf4'; g.font = uiFont(s * r * 1.25, 900); g.textAlign = 'center'; g.textBaseline = 'middle'; g.fillText(label, ...P(x, y + r * 0.1)); }
+    parts[id] = P(x, y);
+  };
+  btn('stick', -0.09, 0.3, 0.095, '');
+  g.fillStyle = lit.has('stick') ? '#04121f' : '#39414f'; g.beginPath(); g.arc(...P(-0.09, 0.3), s * 0.05, 0, Math.PI * 2); g.fill();
+  btn(side === 'left' ? 'y' : 'b', 0.11, 0.22, 0.07, side === 'left' ? 'Y' : 'B');
+  btn(side === 'left' ? 'x' : 'a', 0.08, 0.41, 0.07, side === 'left' ? 'X' : 'A');
+  g.restore();
+  return parts;
+}
+// A label with a line pointing at a controller part.
+function callout(g, from, to, title, sub, align, on) {
+  g.strokeStyle = on ? '#66ffff' : 'rgba(160,190,220,0.55)'; g.lineWidth = 3;
+  g.beginPath(); g.moveTo(...from); g.lineTo(to[0] + (align === 'right' ? 12 : -12), to[1]); g.stroke();
+  g.fillStyle = on ? '#66ffff' : '#8fa8c4'; g.beginPath(); g.arc(...from, 6, 0, Math.PI * 2); g.fill();
+  g.textAlign = align; g.textBaseline = 'middle';
+  g.fillStyle = '#eaf4ff'; g.font = uiFont(30, 900); g.fillText(title, to[0], to[1] - 15);
+  g.fillStyle = '#9db4cc'; g.font = uiFont(22, 600); g.fillText(sub, to[0], to[1] + 17);
+}
+
+// How to play: both controllers with every button labeled, the goal, and ways to score.
+const HELP_W = 1.9, HELP_H = 1.3;
+function paintHowTo(g, W, H, panel, m) {
+  g.fillStyle = 'rgba(8,16,32,0.96)'; rrect(g, 0, 0, W, H, 36); g.fill();
+  g.strokeStyle = 'rgba(102,255,255,0.45)'; g.lineWidth = 4; rrect(g, 2, 2, W - 4, H - 4, 34); g.stroke();
+  g.textAlign = 'center'; g.textBaseline = 'middle';
+  g.fillStyle = '#eaf4ff'; g.font = uiFont(56, 900); textShadow(g, 12); g.fillText('HOW TO PLAY', W / 2, 58); noShadow(g);
+  if (m.inVR) {
+    const L = paintController(g, 520, 272, 320, 'left'), R = paintController(g, W - 520, 272, 320, 'right');
+    const lx = 340, rx = W - 340, ys = [170, 265, 360, 455, 550];
+    callout(g, L.trigger, [lx, ys[0]], 'TRIGGER  PASS', 'point at your ally', 'right');
+    callout(g, L.y, [lx, ys[1]], 'Y  PAUSE', 'menu, settings, exit', 'right');
+    callout(g, L.stick, [lx, ys[2]], 'STICK  FLY', 'goes where you look', 'right');
+    callout(g, L.x, [lx, ys[3]], 'X  BOOST', 'quick burst of speed', 'right');
+    callout(g, L.grip, [lx, ys[4]], 'GRIP  GRAB', 'disc, or hold an air pocket', 'right');
+    callout(g, R.trigger, [rx, ys[0]], 'TRIGGER  PULL', 'point at the disc', 'left');
+    callout(g, R.b, [rx, ys[1]], 'B  POWER', m.power, 'left');
+    callout(g, R.stick, [rx, ys[2]], 'STICK  UP / DOWN', 'sideways to turn', 'left');
+    callout(g, R.a, [rx, ys[3]], 'A  BOOST', 'and select in menus', 'left');
+    callout(g, R.grip, [rx, ys[4]], 'GRIP  THROW', 'swing and let go', 'left');
+  } else {
+    const keys = [['WASD', 'fly where you look'], ['E / Q', 'up / down'], ['SHIFT', 'boost'], ['HOLD G', 'pull the disc'], ['SPACE', 'throw'], ['F', 'pass'], ['C', 'realm power'], ['P', 'pause']];
+    keys.forEach(([k, v], i) => {
+      const x = 180 + (i % 2) * 760, y = 170 + Math.floor(i / 2) * 105;
+      g.fillStyle = 'rgba(102,255,255,0.15)'; rrect(g, x, y - 36, 190, 72, 16); g.fill();
+      g.fillStyle = '#66ffff'; g.font = uiFont(30, 900); g.textAlign = 'center'; g.fillText(k, x + 95, y);
+      g.fillStyle = '#eaf4ff'; g.font = uiFont(30, 700); g.textAlign = 'left'; g.fillText(v, x + 220, y);
+    });
+  }
+  // How to score
+  const y0 = 650;
+  g.fillStyle = 'rgba(255,255,255,0.05)'; rrect(g, 44, y0, W - 88, 210, 24); g.fill();
+  const items = [['THROW', 'through an orange hoop', 'small hoop 2 · big hoop 1'], ['DUNK', 'fly through a hoop holding the disc', '+2 extra'],
+                 ['TRICK SHOT', 'bank it in off a prism', 'double points'], ['SNITCH', 'catch the golden snitch', '+3']];
+  items.forEach(([t, a, b], i) => {
+    const x = 44 + (W - 88) / 4 * (i + 0.5);
+    g.textAlign = 'center'; g.fillStyle = '#ffd166'; g.font = uiFont(34, 900); g.fillText(t, x, y0 + 50);
+    g.fillStyle = '#eaf4ff'; fitFont(g, a, (W - 88) / 4 - 30, 24, 600); g.fillText(a, x, y0 + 100);
+    g.fillStyle = '#9db4cc'; g.font = uiFont(22, 600); g.fillText(b, x, y0 + 140);
+  });
+  g.fillStyle = '#9db4cc'; g.font = uiFont(24, 600); g.textAlign = 'center';
+  g.fillText('Steal from the front, never from behind.  Boost into a rival to knock the disc loose.  Grab glowing orbs for power-ups.', W / 2, 900);
+  const b = panel.button({ id: 'help-close', x: W / 2 - 220, y: 935, w: 440, h: 0, row: 0, col: 0 });
+  b.h = H - 935 - 24;
+  g.fillStyle = '#66ffff'; rrect(g, b.x, b.y, b.w, b.h, 22); g.fill();
+  g.fillStyle = '#04121f'; g.font = uiFont(40, 900); g.fillText('GOT IT', W / 2, b.y + b.h / 2 + 2);
+}
+
 // ------------------------------------------------------------------ painted realm cards (menu tiles and the portal card)
 function paintRealmArt(g, x, y, w, h, realm) {
   g.save();
@@ -328,17 +430,18 @@ function paintStartMenu(g, W, H, panel, m) {
     g.textAlign = 'center'; g.fillStyle = big ? '#04121f' : ink; g.font = uiFont(big ? 46 : 28, 900);
     g.fillText(label, b.x + b.w / 2, b.y + b.h / 2 + 2);
   };
-  btn({ id: 'v1', x: P, y: 880, w: 300, h: 96, row: 5, col: 0 }, 'VERSION 1', '#7a8aa0');
-  btn({ id: 'home', x: P + 316, y: 880, w: 260, h: 96, row: 5, col: 1 }, 'EXIT', '#7a8aa0');
-  btn({ id: 'play', x: W - P - 700, y: 872, w: 700, h: 112, row: 5, col: 2 }, m.result ? 'PLAY AGAIN  ▶' : 'ENTER THE DREAM  ▶', '#66ffff', true);
+  btn({ id: 'help', x: P, y: 880, w: 330, h: 96, row: 5, col: 0 }, 'HOW TO PLAY', '#3d8bff');
+  btn({ id: 'v1', x: P + 346, y: 880, w: 240, h: 96, row: 5, col: 1 }, 'VERSION 1', '#7a8aa0');
+  btn({ id: 'home', x: P + 602, y: 880, w: 180, h: 96, row: 5, col: 2 }, 'EXIT', '#7a8aa0');
+  btn({ id: 'play', x: W - P - 620, y: 872, w: 620, h: 112, row: 5, col: 3 }, m.result ? 'PLAY AGAIN  ▶' : 'ENTER THE DREAM  ▶', '#66ffff', true);
 
   g.textAlign = 'center'; g.fillStyle = dim; g.font = uiFont(21, 600);
-  g.fillText(m.inVR ? 'Point and pull the trigger, or use the left stick and A.   In a match, click a stick to pause.'
+  g.fillText(m.inVR ? 'Point and pull the trigger, or use the left stick and A.   In a match, press Y to pause.'
                     : 'Click with the mouse, or arrow keys and Enter.   In a match, P pauses.', W / 2, H - 32);
 }
 
 // ------------------------------------------------------------------ pause menu
-const PAUSE_W = 1.15, PAUSE_H = 1.18;
+const PAUSE_W = 1.15, PAUSE_H = 1.36;
 function paintPause(g, W, H, panel, m) {
   const ink = '#eaf4ff', dim = '#8fa8c4';
   g.fillStyle = 'rgba(8,16,32,0.95)'; rrect(g, 0, 0, W, H, 36); g.fill();
@@ -350,10 +453,11 @@ function paintPause(g, W, H, panel, m) {
   g.fillStyle = '#3d8bff'; g.textAlign = 'right'; g.fillText(`BLUE ${m.blue}`, W / 2 - 24, 176);
   g.fillStyle = dim; g.textAlign = 'center'; g.fillText(':', W / 2, 174);
   g.fillStyle = '#ff7a2f'; g.textAlign = 'left'; g.fillText(`${m.orange} ORANGE`, W / 2 + 24, 176);
-  const items = [['resume', 'RESUME', '#66ffff'], ['restart', 'RESTART MATCH', '#7a8aa0'], ['menu', 'CHANGE REALM, ARENA OR MODE', '#7a8aa0'],
-                 ['v1', 'PLAY VERSION 1 (CLASSIC)', '#7a8aa0'], ['home', 'EXIT TO HOME SCREEN', '#c0605a']];
+  const items = [['resume', 'RESUME', '#66ffff'], ['help', 'HOW TO PLAY (CONTROLS)', '#7a8aa0'], ['reach', m.reach, '#7a8aa0'],
+                 ['restart', 'RESTART MATCH', '#7a8aa0'], ['menu', 'CHANGE REALM, ARENA OR MODE', '#7a8aa0'],
+                 ['v1', 'PLAY VERSION 1 (CLASSIC)', '#7a8aa0'], ['home', m.exitLabel || 'EXIT TO HOME SCREEN', '#c0605a']];
   items.forEach(([id, label, color], i) => {
-    const b = panel.button({ id, x: 60, y: 226 + i * 128, w: W - 120, h: 108, row: i, col: 0 });
+    const b = panel.button({ id, x: 60, y: 214 + i * 112, w: W - 120, h: 96, row: i, col: 0 });
     const grd = g.createLinearGradient(0, b.y, 0, b.y + b.h);
     grd.addColorStop(0, hexA(color, i === 0 ? 0.95 : 0.35)); grd.addColorStop(1, hexA(color, i === 0 ? 0.7 : 0.2));
     g.fillStyle = grd; rrect(g, b.x, b.y, b.w, b.h, 22); g.fill();
@@ -361,7 +465,7 @@ function paintPause(g, W, H, panel, m) {
     g.fillText(label, W / 2, b.y + b.h / 2 + 2);
   });
   g.fillStyle = dim; g.font = uiFont(22, 600);
-  g.fillText(m.inVR ? 'Point and pull the trigger, or left stick and A.  Click a stick to resume.' : 'Click, or arrow keys and Enter.  P or Esc resumes.', W / 2, H - 36);
+  g.fillText(m.inVR ? 'Point and pull the trigger, or left stick and A.  Y resumes.' : 'Click, or arrow keys and Enter.  P or Esc resumes.', W / 2, H - 36);
 }
 
 // ------------------------------------------------------------------ scoreboard (shows itself only when it matters)
@@ -390,18 +494,28 @@ function paintScoreboard(g, W, H, panel, s) {
 }
 
 // ------------------------------------------------------------------ pop-up messages
+// t: { text, big, color, hint: { side: 'left'|'right', part: 'b'|'grip'|... } } — a hint draws the controller with that button lit.
 function paintToast(g, W, H, panel, t) {
   if (!t.text) return;
   g.textAlign = 'center'; g.textBaseline = 'middle';
+  const pic = t.hint ? 230 : 0, maxText = W - 120 - pic;
   g.font = uiFont(t.big ? 64 : 40, t.big ? 900 : 700);
-  const lines = wrapLines(g, t.text, W - 120).slice(0, 4), lh = t.big ? 76 : 52;
-  const boxH = lines.length * lh + 44, y0 = (H - boxH) / 2;
-  let boxW = 0; for (const l of lines) boxW = Math.max(boxW, g.measureText(l).width);
-  boxW = Math.min(W - 8, boxW + 90);
-  g.fillStyle = 'rgba(6,12,24,0.72)'; rrect(g, (W - boxW) / 2, y0, boxW, boxH, 30); g.fill();
-  if (t.color) { g.strokeStyle = t.color; g.lineWidth = 5; rrect(g, (W - boxW) / 2 + 3, y0 + 3, boxW - 6, boxH - 6, 28); g.stroke(); }
+  const lines = wrapLines(g, t.text, maxText).slice(0, 4), lh = t.big ? 76 : 52;
+  const boxH = Math.max(lines.length * lh + 44, pic ? H - 8 : 0), y0 = (H - boxH) / 2;
+  let tw = 0; for (const l of lines) tw = Math.max(tw, g.measureText(l).width);
+  const boxW = Math.min(W - 8, tw + 90 + pic), x0 = (W - boxW) / 2;
+  g.fillStyle = 'rgba(6,12,24,0.78)'; rrect(g, x0, y0, boxW, boxH, 30); g.fill();
+  if (t.color) { g.strokeStyle = t.color; g.lineWidth = 5; rrect(g, x0 + 3, y0 + 3, boxW - 6, boxH - 6, 28); g.stroke(); }
+  if (pic) {
+    const s = (boxH - 56) / 1.5; // the drawing spans about 1.5 x its size, ring included
+    paintController(g, x0 + 30 + pic / 2, y0 + 40 + 0.52 * s, s, t.hint.side, new Set([t.hint.part]));
+    g.fillStyle = '#66ffff'; g.font = uiFont(22, 900); g.textAlign = 'center';
+    g.fillText(t.hint.side === 'left' ? 'LEFT' : 'RIGHT', x0 + 30 + pic / 2, y0 + 26);
+  }
+  g.font = uiFont(t.big ? 64 : 40, t.big ? 900 : 700); g.textAlign = 'center';
   g.fillStyle = t.color || '#ffffff'; textShadow(g, 10);
-  lines.forEach((l, i) => g.fillText(l, W / 2, y0 + 22 + lh * (i + 0.5)));
+  const cx = x0 + pic + (boxW - pic) / 2, ty = (H - lines.length * lh) / 2;
+  lines.forEach((l, i) => g.fillText(l, cx, ty + lh * (i + 0.5)));
 }
 
 // ------------------------------------------------------------------ entering a realm

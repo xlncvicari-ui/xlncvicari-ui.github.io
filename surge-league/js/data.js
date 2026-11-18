@@ -139,15 +139,38 @@ const LEVELS = [
   { name: 'LEGEND', speed: 1.12, accel: 1.25, aim: 0.45, steal: 1.1, power: 1, rating: 1500 }
 ];
 
+// Cover to hide behind: the same boxes in every arena (each realm draws them its own way). Mirrored, so both teams get the same.
+const COVER_QUARTER = [{ x: 14, y: 5.5, z: 12, w: 7, h: 5, d: 2.5 }, { x: 34, y: 9, z: 34, w: 2.5, h: 12, d: 7 }];
+const COVER_MIDDLE = [{ x: 0, y: 7, z: 20, w: 3, h: 14, d: 3 }];
+
+// Power-up orbs: they appear in mirrored pairs every 12 to 18 seconds. Fly through one to grab it (bots grab them too).
+const POWERUPS = [
+  { id: 'speed', name: 'SPEED', color: '#5dff8a', time: 6, hint: 'Double speed for 6 seconds!' },
+  { id: 'magnet', name: 'MAGNET', color: '#ff5ad1', time: 7, hint: 'The disc jumps to your hands for 7 seconds.' },
+  { id: 'shield', name: 'SHIELD', color: '#ffd23d', time: 8, hint: 'Nobody can steal from you or stun you for 8 seconds.' },
+  { id: 'mega', name: 'MEGA THROW', color: '#ff8a1f', time: 12, hint: 'Your next throw is super fast and knocks rivals over.' }
+];
+const DUNK_BONUS = 2, FIRE_BONUS = 1, FINAL_SURGE_AT = 30, TACKLE_SPEED = 7;
+
+// Which button each tip is about, so the pop-up shows the controller with that button lit.
+const TIP_HINTS = {
+  boost: { side: 'right', part: 'a' }, grab: { side: 'right', part: 'grip' }, throw: { side: 'right', part: 'grip' },
+  easyThrow: { side: 'right', part: 'trigger' }, pass: { side: 'left', part: 'trigger' }, steal: { side: 'right', part: 'grip' },
+  pocket: { side: 'left', part: 'grip' }, pause: { side: 'left', part: 'y' }, power: { side: 'right', part: 'b' }
+};
+
 // One-time coach tips. [Quest text, PC text]
 const TIPS = {
+  pause: ['Press Y any time to pause.', 'Press P any time to pause.'],
+  dunk: ['Holding the disc? Fly right through a rival hoop to DUNK for 2 extra points!', 'Holding the disc? Fly through a rival hoop to DUNK for 2 extra!'],
+  orb: ['Fly through the glowing orb to grab a power-up!', 'Fly through the glowing orb to grab a power-up!'],
   boost: ['Tap A or X to boost.', 'Shift boosts.'],
   grab: ['Reach for the disc and grip. It snaps into your hand.', 'Look at the disc and hold G to pull it in.'],
   throw: ['Swing your arm and let go of grip to throw. Flick your wrist to curve it.', 'Space throws where you look. Hold A or D to curve.'],
   easyThrow: ['Point and press trigger to throw.', ''],
-  pass: ['Point at your ALLY and press trigger to pass.', 'Press F to pass to your ally.'],
+  pass: ['Point at your ALLY and pull the trigger to pass.', 'Press F to pass to your ally.'],
   clock: ['8 seconds max with the disc. Throw or pass!', '8 seconds max with the disc. Throw or pass!'],
-  steal: ['Steal from the front or side, never from behind. Cut in front!', 'Steal from the front or side, never from behind. Cut in front!'],
+  steal: ['Grab it from the front, or BOOST straight into them to knock it loose!', 'Grab it from the front, or boost straight into them to knock it loose!'],
   pocket: ['Grip the shimmering air pocket, pull yourself along, let go to fling.', ''],
   wind: ['Wind stream! It carries you along the side.', 'Wind stream! It carries you along the side.'],
   prism: ['Prism Court: throw from a launch ring at the prism\'s glowing center. It banks into the hoop for a TRICK SHOT.', 'Prism Court: throw from a launch ring at the prism\'s glowing center for a TRICK SHOT.'],

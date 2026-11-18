@@ -94,6 +94,7 @@ const HOOP_STYLE = {
   castle(R, team) {
     const col = TEAM_COLOR[team], obj = new T.Group();
     const stones = around(12, (i, a) => ({ geo: G.box(0.62, 0.5, 0.5), pos: [Math.cos(a) * R, Math.sin(a) * R, 0], rot: [0, 0, a / DEG + 90], color: i % 2 ? '#8a8f9e' : '#7c8190' }));
+    for (const s of [-1, 1]) stones.push({ geo: G.cyl2(0.07, 0.05, 0.7, 8), pos: [s * (R + 0.6), 0, 0.2], color: '#5a4128' }); // torch handles
     obj.add(solid(stones, { roughness: 0.95, flatShading: true }));
     const trim = stdMat(col, { emissive: col, emissiveIntensity: 0.9 });
     obj.add(new T.Mesh(new T.TorusGeometry(R - 0.32, 0.05, 6, 48), trim));
@@ -103,7 +104,6 @@ const HOOP_STYLE = {
     const flames = [];
     for (const s of [-1, 1]) {
       const torch = new T.Group(); torch.position.set(s * (R + 0.6), 0, 0.2);
-      torch.add(new T.Mesh(new T.CylinderGeometry(0.07, 0.05, 0.7, 8), stdMat('#5a4128')));
       const flame = new T.Mesh(new T.ConeGeometry(0.16, 0.45, 10), addMat('#ffb347', 0.95)); flame.position.y = 0.55;
       const halo = glowSprite('#ffb347', 1.6, 0.7); halo.position.y = 0.6;
       torch.add(flame, halo); obj.add(torch); flames.push({ flame, halo, ph: s * 1.7 });
@@ -142,8 +142,8 @@ function buildPole(realm, team, height) {
     const base = new T.Mesh(new T.CylinderGeometry(1, 1.2, 0.3, 24), stdMat('#3a3570', { metalness: 0.7 })); base.position.y = -height / 2 + 0.15; g.add(base);
   } else if (id === 'foundry') {
     g.add(solid([{ geo: G.box(0.36, height, 0.12), pos: [0, 0, 0], color: '#5f6670' }, { geo: G.box(0.12, height, 0.36), pos: [0, 0, 0], color: '#5f6670' },
-                 { geo: G.box(0.5, 0.5, 0.5), pos: [0, -height / 2 + 0.25, 0], color: '#3d4148' }], { metalness: 0.8, roughness: 0.4 }));
-    for (let i = 0; i < 4; i++) { const s = new T.Mesh(new T.BoxGeometry(0.4, 0.25, 0.4), stdMat(i % 2 ? '#1a1a1a' : '#ffcc00')); s.position.y = -height / 2 + 1 + i * 0.25; g.add(s); }
+                 { geo: G.box(0.5, 0.5, 0.5), pos: [0, -height / 2 + 0.25, 0], color: '#3d4148' },
+                 ...[0, 1, 2, 3].map(i => ({ geo: G.box(0.4, 0.25, 0.4), pos: [0, -height / 2 + 1 + i * 0.25, 0], color: i % 2 ? '#1a1a1a' : '#ffcc00' }))], { metalness: 0.8, roughness: 0.4 }));
   } else if (id === 'castle') {
     g.add(new T.Mesh(new T.CylinderGeometry(0.28, 0.36, height, 10), stdMat('#7c8190', { roughness: 0.95, flatShading: true })));
     const cap = new T.Mesh(new T.CylinderGeometry(0.5, 0.3, 0.4, 10), stdMat('#8a8f9e', { roughness: 0.9 })); cap.position.y = height / 2 - 0.2; g.add(cap);
@@ -171,13 +171,13 @@ const ROCK_STYLE = {
   },
   foundry(p, ob) {
     // Wrecking balls: spiked iron balls swinging on chains from the girders.
-    const mesh = new T.Group(), mat = stdMat('#4a4f57', { metalness: 0.9, roughness: 0.35, transparent: true });
-    mesh.add(new T.Mesh(new T.IcosahedronGeometry(p.r, 1), mat));
-    const spikes = new T.Mesh(mergeParts(around(12, (i, a) => { const v = new T.Vector3(Math.cos(a) * Math.sin(1 + i % 3), Math.cos(1 + i % 3) * (i % 2 ? 1 : -1), Math.sin(a) * Math.sin(1 + i % 3)).normalize(); const q = new T.Quaternion().setFromUnitVectors(UP, v), e = new T.Euler().setFromQuaternion(q); return { geo: G.cone(p.r * 0.22, p.r * 0.6, 8), pos: v.clone().multiplyScalar(p.r * 1.05).toArray(), rot: [e.x / DEG, e.y / DEG, e.z / DEG], color: '#ff8a1f' }; })), stdMat('#ffffff', { vertexColors: true, metalness: 0.6, emissive: '#ff5a00', emissiveIntensity: 0.25, transparent: true }));
-    mesh.add(spikes);
+    // Ball and spikes baked into one mesh (one draw call each).
+    const spikes = around(12, (i, a) => { const v = new T.Vector3(Math.cos(a) * Math.sin(1 + i % 3), Math.cos(1 + i % 3) * (i % 2 ? 1 : -1), Math.sin(a) * Math.sin(1 + i % 3)).normalize(); const q = new T.Quaternion().setFromUnitVectors(UP, v), e = new T.Euler().setFromQuaternion(q); return { geo: G.cone(p.r * 0.22, p.r * 0.6, 8), pos: v.clone().multiplyScalar(p.r * 1.05).toArray(), rot: [e.x / DEG, e.y / DEG, e.z / DEG], color: '#ff8a1f' }; });
+    const mat = stdMat('#ffffff', { vertexColors: true, metalness: 0.75, roughness: 0.35, emissive: '#ff5a00', emissiveIntensity: 0.12, transparent: true });
+    const mesh = new T.Mesh(mergeParts([{ geo: new T.IcosahedronGeometry(p.r, 1), pos: [0, 0, 0], color: '#4a4f57' }, ...spikes]), mat);
     const anchor = new T.Vector3(ob.c.x, Y_MAX + 8, ob.c.z), len = anchor.y - ob.c.y, sx = Math.sign(p.x) || 1;
     const chain = new T.Mesh(new T.CylinderGeometry(0.08, 0.08, 1, 6), stdMat('#2b2622', { metalness: 0.8 }));
-    return { mesh, extra: [chain], mats: [mat, spikes.material], update: (dt, t) => {
+    return { mesh, extra: [chain], mats: [mat], update: (dt, t) => {
       const ang = Math.sin(t * 0.9) * 0.2;
       ob.c.set(anchor.x + Math.sin(ang) * len * sx, anchor.y - Math.cos(ang) * len, anchor.z);
       mesh.position.copy(ob.c); mesh.rotation.z = ang * sx;
@@ -234,16 +234,16 @@ function buildFieldExtras(realm, group) {
     const rings = [0, 1, 2].map(i => { const m = new T.Mesh(new T.RingGeometry(0.97, 1, 96), addMat('#66ffff', 0.5)); m.rotation.x = -Math.PI / 2; m.position.y = 0.42; group.add(m); return { m, ph: i / 3 }; });
     updates.push((dt, t) => { for (const r of rings) { const k = (t / 6 + r.ph) % 1; r.m.scale.setScalar(8 + k * 52); r.m.material.opacity = 0.45 * (1 - k); } });
   } else if (realm.id === 'foundry') {
-    const cracks = canvasTexture(1024, 1024, (g, w) => {
-      g.clearRect(0, 0, w, w); const rnd = seeded(23);
-      g.strokeStyle = '#ff7a1a'; g.lineCap = 'round'; g.shadowColor = '#ff5a00'; g.shadowBlur = 16;
-      for (let i = 0; i < 26; i++) {
-        let x = rnd() * w, y = rnd() * w; g.lineWidth = 3 + rnd() * 5; g.beginPath(); g.moveTo(x, y);
-        for (let k = 0; k < 7; k++) { x += (rnd() - 0.5) * 110; y += (rnd() - 0.5) * 110; g.lineTo(x, y); }
-        g.stroke();
-      }
+    // Clean glowing seams between the deck plates, with a hot spot at each corner (tiles across the floor).
+    const cracks = canvasTexture(512, 512, (g, w) => {
+      g.clearRect(0, 0, w, w);
+      g.strokeStyle = 'rgba(255,122,26,0.9)'; g.lineWidth = 5; g.shadowColor = '#ff5a00'; g.shadowBlur = 14;
+      g.strokeRect(2, 2, w - 4, w - 4);
+      g.lineWidth = 3; g.beginPath(); g.moveTo(w / 2, 0); g.lineTo(w / 2, w); g.stroke();
+      g.fillStyle = '#ffcf4a';
+      for (const [x, y] of [[0, 0], [w, 0], [0, w], [w, w]]) { g.beginPath(); g.arc(x, y, 12, 0, 7); g.fill(); }
     });
-    cracks.wrapS = cracks.wrapT = T.RepeatWrapping; cracks.repeat.set(5, 5);
+    cracks.wrapS = cracks.wrapT = T.RepeatWrapping; cracks.repeat.set(7.5, 7.5);
     const lava = new T.Mesh(new T.CircleGeometry(ARENA_R, 64), new T.MeshBasicMaterial({ map: cracks, transparent: true, opacity: 0.7, depthWrite: false, blending: T.AdditiveBlending }));
     lava.rotation.x = -Math.PI / 2; lava.position.y = 0.36; group.add(lava);
     updates.push((dt, t) => { lava.material.opacity = 0.55 + Math.sin(t * 1.7) * 0.12 + Math.sin(t * 5.3) * 0.06; });
@@ -252,7 +252,7 @@ function buildFieldExtras(realm, group) {
       g.clearRect(0, 0, w, w); const rnd = seeded(31);
       for (let i = 0; i < 90; i++) { const x = rnd() * w, y = rnd() * w, r = 30 + rnd() * 70, grd = g.createRadialGradient(x, y, 0, x, y, r); grd.addColorStop(0, 'rgba(200,215,255,0.22)'); grd.addColorStop(1, 'rgba(200,215,255,0)'); g.fillStyle = grd; g.fillRect(x - r, y - r, r * 2, r * 2); }
     });
-    const mists = [1.2, 3].map((y, i) => { const m = new T.Mesh(new T.CircleGeometry(ARENA_R + 6, 64), new T.MeshBasicMaterial({ map: mistTex, transparent: true, opacity: 0.55 - i * 0.2, depthWrite: false })); m.rotation.x = -Math.PI / 2; m.position.y = y; group.add(m); return m; });
+    const mists = [1.2, 3].map((y, i) => { const m = new T.Mesh(new T.CircleGeometry(ARENA_R + 6, 64), new T.MeshBasicMaterial({ map: mistTex, transparent: true, opacity: 0.3 - i * 0.12, depthWrite: false })); m.rotation.x = -Math.PI / 2; m.position.y = y; group.add(m); return m; });
     updates.push((dt) => { mists[0].rotation.z += dt * 0.02; mists[1].rotation.z -= dt * 0.015; });
   } else if (realm.id === 'gym') {
     const court = canvasTexture(1024, 1024, (g, w) => {
@@ -268,12 +268,87 @@ function buildFieldExtras(realm, group) {
     const lines = new T.Mesh(new T.CircleGeometry(ARENA_R, 64), new T.MeshBasicMaterial({ map: court, transparent: true, depthWrite: false }));
     lines.rotation.x = -Math.PI / 2; lines.position.y = 0.37; group.add(lines);
   } else if (realm.id === 'cloud') {
-    const rnd = seeded(51), n = 600, pos = new Float32Array(n * 3), col = new Float32Array(n * 3), c = new T.Color(), cols = ['#ffffff', '#ffe66b', '#ff9ecf', '#b6a2ff'];
+    const rnd = seeded(51), n = 260, pos = new Float32Array(n * 3), col = new Float32Array(n * 3), c = new T.Color(), cols = ['#ffffff', '#ffe66b', '#ff9ecf', '#b6a2ff'];
     for (let i = 0; i < n; i++) { const a = rnd() * Math.PI * 2, r = Math.sqrt(rnd()) * (ARENA_R - 2); pos.set([Math.cos(a) * r, 0.42, Math.sin(a) * r], i * 3); c.set(cols[i % 4]); col.set([c.r, c.g, c.b], i * 3); }
     const geo = new T.BufferGeometry(); geo.setAttribute('position', new T.BufferAttribute(pos, 3)); geo.setAttribute('color', new T.BufferAttribute(col, 3));
     group.add(new T.Points(geo, new T.PointsMaterial({ size: 0.35, map: dotTexture(), vertexColors: true, transparent: true, depthWrite: false })));
   }
   return updates;
+}
+
+// ------------------------------------------------------------------ cover (big shapes to hide behind)
+// Each style returns parts centered on the box (b: { x, y, z, w, h, d }): { solid: [...], glow: [...], opts }.
+// buildCover() bakes every box of the arena into one or two meshes, so all the cover costs at most two draw calls.
+const COVER_STYLE = {
+  saucer(b) {
+    const e = 0.06, hw = b.w / 2, hh = b.h / 2, hd = b.d / 2, glow = [];
+    for (const sx of [-1, 1]) for (const sz of [-1, 1]) glow.push({ geo: G.box(e, b.h, e), pos: [sx * hw, 0, sz * hd], color: '#66ffff' });
+    for (const sy of [-1, 1]) for (const sz of [-1, 1]) glow.push({ geo: G.box(b.w, e, e), pos: [0, sy * hh, sz * hd], color: '#ff4fd8' });
+    for (const sy of [-1, 1]) for (const sx of [-1, 1]) glow.push({ geo: G.box(e, e, b.d), pos: [sx * hw, sy * hh, 0], color: '#66ffff' });
+    return { solid: [{ geo: G.box(b.w, b.h, b.d), pos: [0, 0, 0], color: '#1d1840' }], glow, opts: { metalness: 0.7, roughness: 0.3 } };
+  },
+  foundry(b) {
+    // A shipping container with ribs and a hazard stripe.
+    const parts = [{ geo: G.box(b.w, b.h, b.d), pos: [0, 0, 0], color: '#8a3b22' }];
+    const long = b.w >= b.d, n = Math.max(3, Math.round((long ? b.w : b.d) / 0.8));
+    for (let i = 0; i < n; i++) {
+      const t = -0.5 + (i + 0.5) / n;
+      parts.push(long ? { geo: G.box(0.12, b.h * 0.94, b.d + 0.08), pos: [t * b.w, 0, 0], color: '#6e2f1b' } : { geo: G.box(b.w + 0.08, b.h * 0.94, 0.12), pos: [0, 0, t * b.d], color: '#6e2f1b' });
+    }
+    for (let i = 0; i < 8; i++) parts.push({ geo: G.box(long ? b.w / 8 : b.w + 0.1, 0.35, long ? b.d + 0.1 : b.d / 8), pos: [long ? (i - 3.5) * b.w / 8 : 0, b.h / 2 - 0.25, long ? 0 : (i - 3.5) * b.d / 8], color: i % 2 ? '#1a1a1a' : '#ffcc00' });
+    return { solid: parts, opts: { metalness: 0.6, roughness: 0.55 } };
+  },
+  castle(b) {
+    // A ruined stone wall: stacked blocks with a broken, uneven top.
+    const parts = [], rnd = seeded(Math.round(b.x * 7 + b.z * 13 + 100)), long = b.w >= b.d, len = long ? b.w : b.d, thick = long ? b.d : b.w;
+    const cols = Math.max(2, Math.round(len / 1.2)), rows = Math.max(2, Math.round(b.h / 0.9));
+    for (let r = 0; r < rows; r++) for (let c = 0; c < cols; c++) {
+      if (r === rows - 1 && rnd() < 0.35) continue;
+      const bl = len / cols, bh = b.h / rows, off = (r % 2 ? 0.25 : -0.25) * bl;
+      const t = -len / 2 + (c + 0.5) * bl + off;
+      if (Math.abs(t) > len / 2 - bl * 0.2) continue;
+      const v = 0.85 + rnd() * 0.15, col = `rgb(${Math.round(110 * v)},${Math.round(114 * v)},${Math.round(130 * v)})`;
+      parts.push({ geo: G.box(long ? bl * 0.96 : thick, bh * 0.94, long ? thick : bl * 0.96), pos: [long ? t : 0, -b.h / 2 + (r + 0.5) * bh, long ? 0 : t], color: col });
+    }
+    return { solid: parts, opts: { roughness: 0.95, flatShading: true } };
+  },
+  gym(b) {
+    // Giant stacked foam blocks in pastel colors.
+    const parts = [], cols = ['#ff9ecf', '#9fd3ff', '#ffe08a', '#b6f0a8', '#d2b6ff'], rows = Math.max(2, Math.round(b.h / 1.6));
+    for (let r = 0; r < rows; r++) {
+      const bh = b.h / rows;
+      parts.push({ geo: G.box(b.w * (r % 2 ? 0.94 : 1), bh * 0.97, b.d * (r % 2 ? 1 : 0.94)), pos: [0, -b.h / 2 + (r + 0.5) * bh, 0], color: cols[(r + Math.round(Math.abs(b.x + b.z))) % cols.length] });
+    }
+    return { solid: parts, opts: { roughness: 0.6 } };
+  },
+  cloud(b) {
+    // White marble with gold trim.
+    return { solid: [{ geo: G.box(b.w, b.h * 0.86, b.d), pos: [0, 0, 0], color: '#f2efe8' },
+                     { geo: G.box(b.w + 0.3, b.h * 0.07, b.d + 0.3), pos: [0, b.h * 0.465, 0], color: '#e8c46a' },
+                     { geo: G.box(b.w + 0.3, b.h * 0.07, b.d + 0.3), pos: [0, -b.h * 0.465, 0], color: '#e8c46a' }], opts: { roughness: 0.4, metalness: 0.1 } };
+  }
+};
+function buildCover(realm, boxes) {
+  const all = [], glow = []; let opts = {};
+  for (const b of boxes) {
+    const st = COVER_STYLE[realm.id](b), at = p => ({ ...p, pos: [p.pos[0] + b.x, p.pos[1] + b.y, p.pos[2] + b.z] });
+    all.push(...st.solid.map(at)); glow.push(...(st.glow || []).map(at)); opts = st.opts || {};
+  }
+  const g = new T.Group();
+  g.add(solid(all, opts));
+  if (glow.length) g.add(glowing(glow));
+  return g;
+}
+
+// A power-up orb: a glowing shape with its name above it.
+function buildOrb(type) {
+  const g = new T.Group();
+  const core = new T.Mesh(new T.IcosahedronGeometry(0.55, 1), new T.MeshStandardMaterial({ color: type.color, emissive: type.color, emissiveIntensity: 0.9, flatShading: true, roughness: 0.3 }));
+  const ring = new T.Mesh(new T.TorusGeometry(0.95, 0.05, 6, 40), addMat(type.color, 0.9));
+  const tag = labelSprite(type.name, { color: '#ffffff', bg: hexA(type.color, 0.65), height: 0.42 }); tag.position.y = 1.4;
+  g.add(core, ring, glowSprite(type.color, 3.6, 0.6), tag);
+  g.userData = { core, ring };
+  return g;
 }
 
 // ------------------------------------------------------------------ hazards
@@ -405,7 +480,25 @@ const HAZARD_BUILD = {
           return;
         }
       },
-      body() {}
+      // Riders go through too: fly into a portal and you come out of its twin, same speed and direction.
+      prev: new Map(),
+      body(pos, vel, dt, game, who) {
+        const prev = this.prev.get(who);
+        this.prev.set(who, { p: pos.clone(), cool: prev ? Math.max(0, prev.cool - dt) : 0 });
+        if (!prev || prev.cool > 0) return;
+        for (const pair of pairs) for (let i = 0; i < 2; i++) {
+          const a = pair[i], b = pair[1 - i];
+          const d0 = tmp.subVectors(prev.p, a.c).dot(a.n), d1 = tmp.subVectors(pos, a.c).dot(a.n);
+          if (!(d0 > 0 && d1 <= 0)) continue;
+          tmp.subVectors(pos, a.c); tmp.x = 0;
+          if (tmp.length() > 3) continue;
+          const offset = new T.Vector3(b.c.x + b.n.x * 1.4, b.c.y + tmp.y, b.c.z + tmp.z).sub(pos);
+          if (who === 'player') game.teleportPlayer(offset); else pos.add(offset);
+          this.prev.set(who, { p: pos.clone(), cool: 0.8 });
+          if (game) game.hazardPing(pos.clone(), 'portal');
+          return;
+        }
+      }
     };
   },
 
