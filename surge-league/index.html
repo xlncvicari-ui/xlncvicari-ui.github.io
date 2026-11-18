@@ -168,10 +168,17 @@
     const enter = () => { if (!scene.is('vr-mode')) Promise.resolve(scene.enterVR()).catch(() => { tap.style.display = 'flex'; }); };
     tap.addEventListener('click', enter);
     scene.addEventListener('enter-vr', () => { tap.style.display = 'none'; });
-    scene.addEventListener('exit-vr', () => { tap.style.display = 'flex'; });
+    let leftOnPurpose = false;
+    scene.addEventListener('exit-vr', () => { tap.style.display = 'flex'; leftOnPurpose = true; });
     tap.style.display = 'flex';
-    const auto = () => { if (navigator.xr) navigator.xr.isSessionSupported('immersive-vr').then(ok => { if (ok) enter(); }, () => {}); };
+    // Try right away, and again whenever the window becomes visible (the headset refuses VR for a hidden page).
+    const auto = () => {
+      if (!navigator.xr || leftOnPurpose || document.hidden || scene.is('vr-mode') || !scene.hasLoaded) return;
+      navigator.xr.isSessionSupported('immersive-vr').then(ok => { if (ok) enter(); }, () => {});
+    };
     if (scene.hasLoaded) auto(); else scene.addEventListener('loaded', auto);
+    document.addEventListener('visibilitychange', auto);
+    window.addEventListener('focus', auto);
   }
 </script>
 </body>
