@@ -333,6 +333,7 @@ function buildCover(realm, boxes) {
   for (const b of boxes) {
     const st = COVER_STYLE[realm.id](b), at = p => ({ ...p, pos: [p.pos[0] + b.x, p.pos[1] + b.y, p.pos[2] + b.z] });
     all.push(...st.solid.map(at)); glow.push(...(st.glow || []).map(at)); opts = st.opts || {};
+    if (!st.glow) glow.push(...coverStrips(b, realm.edge).map(at)); // cove strip lights (js/look.js)
   }
   const g = new T.Group();
   g.add(solid(all, opts));

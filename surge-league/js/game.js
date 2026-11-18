@@ -27,6 +27,7 @@ AFRAME.registerComponent('surge-game', {
     this.track = { left: { real: [], glove: [], q: null, omega: new T.Vector3() }, right: { real: [], glove: [], q: null, omega: new T.Vector3() } };
     this.keys = {};
     this.save = Profiles.init(loadSave());
+    this.flight = FLIGHT_MODES.includes(this.save.flight) ? this.save.flight : 'free';
     this.level = LEVELS[Math.min(LEVELS.length - 1, this.save.level || 0)];
     this.menu = { row: 0, realm: 'shuffle', arena: 'frisbee', mode: 'hoops', ...this.save.menu };
     this.stats = this.freshStats();
@@ -45,6 +46,7 @@ AFRAME.registerComponent('surge-game', {
     this.pauseOpen = false; this.pauseRow = 0; this.versionPick = 'v2';
     this.net = new NetClient({ welcome: m => { this.save.token = m.token; writeSave(this.save); }, rating: m => this.flash(`ONLINE RANK: ${m.rank} ${m.rating} (${m.delta >= 0 ? '+' : ''}${m.delta})`, 3), match: m => this.flash(`MATCH FOUND: ${m.players.map(p => p.name).join(' vs ')}`, 3) });
     if (this.save.server) this.net.connect(this.save.server, Profiles.current(this.save), this.save.token);
+    this.envMaps = buildEnvMaps(this.el.renderer);
     this.buildStatic();
     this.buildBots();
     this.buildPanels();
@@ -102,6 +104,9 @@ AFRAME.registerComponent('surge-game', {
     scene.add(this.trail);
     const arrow = () => { const g = new T.ConeGeometry(0.045, 0.15, 8); g.rotateX(Math.PI / 2); const m = new T.Mesh(g, new T.MeshBasicMaterial()); m.visible = false; this.rig.add(m); return m; };
     this.discArrow = arrow(); this.snitchArrow = arrow();
+    // Where your hands are steering: a faint ring ahead of you while you fly.
+    this.steerMark = new T.Mesh(new T.RingGeometry(0.2, 0.26, 32), new T.MeshBasicMaterial({ color: '#66ffff', transparent: true, opacity: 0, depthWrite: false, fog: false, toneMapped: false }));
+    this.steerMark.visible = false; scene.add(this.steerMark);
     const bg = new T.BufferGeometry();
     bg.setAttribute('position', new T.BufferAttribute(new Float32Array(48 * 3), 3));
     this.burst = new T.Points(bg, new T.PointsMaterial({ size: 0.45, map: dotTexture(), transparent: true, depthWrite: false }));
@@ -147,10 +152,13 @@ AFRAME.registerComponent('surge-game', {
     const add = (t, a, p) => this.add(t, a, p);
     this.bots = defs.map(def => {
       const el = add('a-entity', {}), col = TEAM_COLOR[def.team];
-      // Rider: smooth team helmet with a dark glass visor, a light suit and a glowing team stripe.
-      add('a-sphere', { radius: 0.3, position: '0 0.62 0', 'segments-width': 28, 'segments-height': 18, material: `color: ${col}; metalness: 0.35; roughness: 0.3; emissive: ${col}; emissiveIntensity: 0.15` }, el);
-      add('a-sphere', { radius: 0.25, position: '0 0.64 0.11', scale: '1.05 0.55 0.85', 'segments-width': 24, 'segments-height': 12, material: 'color: #0b1320; metalness: 0.9; roughness: 0.12; emissive: #66ffff; emissiveIntensity: 0.18' }, el);
-      add('a-cone', { 'radius-bottom': 0.26, 'radius-top': 0.17, height: 0.42, position: '0 0.2 0', 'segments-radial': 20, material: 'color: #e8eef6; roughness: 0.5' }, el);
+      // Rider: glossy black helmet and suit with neon team trim (the look from the owner's reference clip): a glowing visor,
+      // a band round the helmet and two stripes on the suit.
+      add('a-sphere', { radius: 0.3, position: '0 0.62 0', 'segments-width': 28, 'segments-height': 18, material: 'color: #15171c; metalness: 0.6; roughness: 0.22' }, el);
+      add('a-sphere', { radius: 0.25, position: '0 0.64 0.11', scale: '1.05 0.55 0.85', 'segments-width': 24, 'segments-height': 12, material: `color: #0b1320; metalness: 0.9; roughness: 0.1; emissive: ${col}; emissiveIntensity: 0.55` }, el);
+      add('a-torus', { radius: 0.3, 'radius-tubular': 0.018, position: '0 0.6 0', rotation: '90 0 0', 'segments-tubular': 36, material: `color: ${col}; emissive: ${col}; emissiveIntensity: 1` }, el);
+      add('a-cone', { 'radius-bottom': 0.26, 'radius-top': 0.17, height: 0.42, position: '0 0.2 0', 'segments-radial': 20, material: 'color: #1a1c21; metalness: 0.35; roughness: 0.4' }, el);
+      add('a-torus', { radius: 0.255, 'radius-tubular': 0.02, position: '0 0.03 0', rotation: '90 0 0', 'segments-tubular': 32, material: `color: ${col}; emissive: ${col}; emissiveIntensity: 1` }, el);
       add('a-torus', { radius: 0.22, 'radius-tubular': 0.03, position: '0 0.24 0', rotation: '90 0 0', 'segments-tubular': 32, material: `color: ${col}; emissive: ${col}; emissiveIntensity: 0.9` }, el);
       const tag = labelSprite(def.label, { color: '#ffffff', bg: hexA(col, 0.55), height: 0.45 }); tag.position.y = 1.3; el.object3D.add(tag);
       const halo = glowSprite(col, 2.6, 0.35); halo.position.y = 0.5; el.object3D.add(halo);
@@ -185,7 +193,13 @@ AFRAME.registerComponent('surge-game', {
     this.sky.material.needsUpdate = true;
     this.applyLights(realm, false);
     const floor = this.floors[realm.floor] || (this.floors[realm.floor] = floorTexture(realm.floor));
-    this.halves.forEach((m, i) => { m.material.map = floor; m.material.color.set(realm.tint[i ? 'orange' : 'blue']); m.material.needsUpdate = true; });
+    const look = LOOK[realm.id];
+    this.el.object3D.environment = this.envMaps[realm.id];
+    this.halves.forEach((m, i) => {
+      const mat = m.material; mat.map = floor; mat.color.set(realm.tint[i ? 'orange' : 'blue']);
+      mat.emissiveMap = floorLightTexture(); mat.emissive.set(look.patch[0]); mat.emissiveIntensity = look.patch[1]; mat.roughness = look.floorRough; mat.metalness = 0.1;
+      mat.needsUpdate = true;
+    });
     this.ground.visible = !!realm.ground;
     if (realm.ground) this.ground.material.color.set(realm.ground);
     this.lineMat.color.set(realm.lines);
@@ -206,12 +220,14 @@ AFRAME.registerComponent('surge-game', {
 
   // Realm lighting. dim = the LIGHTS OUT surge: almost dark, the disc and riders glow.
   applyLights(realm, dim) {
-    const k = dim ? 0.18 : 1, fog = new T.Color(realm.fog).multiplyScalar(dim ? 0.25 : 1);
-    this.el.object3D.fog = new T.FogExp2(fog, realm.fogDensity * (dim ? 1.6 : 1));
+    const look = LOOK[realm.id], k = dim ? 0.18 : 1, fog = new T.Color(realm.fog).multiplyScalar((dim ? 0.25 : 1) * look.fog[1]);
+    this.el.object3D.fog = new T.FogExp2(fog, realm.fogDensity * look.fog[0] * (dim ? 1.6 : 1));
     this.el.object3D.background = fog;
-    this.$('hemi').setAttribute('light', { color: realm.hemi[0], groundColor: realm.hemi[1], intensity: realm.hemi[2] * k });
-    this.$('sun').setAttribute('light', { color: realm.sun[0], intensity: realm.sun[1] * k });
-    this.sky.material.color.setScalar(dim ? 0.3 : 1);
+    // The cinematic grade (js/look.js): less flat fill light, a stronger and warmer key light.
+    const sun = new T.Color(realm.sun[0]).lerp(new T.Color(look.sunTint), look.warm);
+    this.$('hemi').setAttribute('light', { color: realm.hemi[0], groundColor: realm.hemi[1], intensity: realm.hemi[2] * look.ambient * k });
+    this.$('sun').setAttribute('light', { color: '#' + sun.getHexString(), intensity: realm.sun[1] * look.key * k });
+    this.sky.material.color.set(look.sky).multiplyScalar(dim ? 0.3 : 1);
     this.discGlow.scale.setScalar(dim ? 7 : 2.4); this.discGlow.material.opacity = dim ? 0.8 : 0.45;
   },
 
@@ -399,6 +415,7 @@ AFRAME.registerComponent('surge-game', {
     Object.assign(d, { holder: null, hand: null, pulledBy: null, snapping: false, tractor: null, passTo: null, lastThrower: null, noCatch: 0, holdT: 0, curve: 0, bankT: -99, away: 0, spin: 0, mega: false });
     this.rig.position.set(0, 14 - 1.3, 40);
     this.rig.rotation.set(0, 0, 0);
+    this.steerDir = null; this.levelT = 0; this.turnEase = 0; this.turnRate = 0;
     this.vel.set(0, 0, 0); this.holdVel.set(0, 0, 0);
     this.anchors.left = this.anchors.right = null;
     this.energy = ENERGY_MAX; this.energyIdle = 0; this.boostT = 0; this.boostCool = 0;
@@ -483,10 +500,11 @@ AFRAME.registerComponent('surge-game', {
     const inVR = this.el.is('vr-mode') && this.el.renderer.xr.isPresenting;
     const cam = this.headEl.getObject3D('camera');
     const fwd = cam.getWorldDirection(new T.Vector3()), headPos = cam.getWorldPosition(new T.Vector3());
-    const right = new T.Vector3(-fwd.z, 0, fwd.x);
+    // Up and right follow your ride, not the arena, so they still make sense upside down.
+    const rigUp = UP.clone().applyQuaternion(this.rig.quaternion), right = new T.Vector3().crossVectors(fwd, rigUp);
     if (right.lengthSq() < 1e-4) right.set(1, 0, 0).applyQuaternion(this.rig.quaternion); else right.normalize();
-    const inp = { inVR, fwd, right, headPos, quat: cam.getWorldQuaternion(new T.Quaternion()), moveX: 0, moveY: 0, climb: 0, turnX: 0,
-                  boost: false, power: false, pass: false, start: false, yDown: false, pausePress: false, menuX: 0, menuY: 0, hands: [] };
+    const inp = { inVR, fwd, right, rigUp, headPos, quat: cam.getWorldQuaternion(new T.Quaternion()), moveX: 0, moveY: 0, climb: 0, turnX: 0,
+                  boost: false, boostHeld: false, level: false, power: false, pass: false, start: false, yDown: false, pausePress: false, menuX: 0, menuY: 0, hands: [] };
     if (inVR) {
       const xr = this.el.renderer.xr, frame = this.el.frame || xr.getFrame(), ref = xr.getReferenceSpace();
       const rigQ = this.rig.quaternion, headLocal = this.rig.worldToLocal(headPos.clone());
@@ -496,8 +514,10 @@ AFRAME.registerComponent('surge-game', {
         if (!gp || (side !== 'left' && side !== 'right')) continue;
         const sx = gp.axes.length >= 4 ? gp.axes[2] : (gp.axes[0] || 0), sy = gp.axes.length >= 4 ? gp.axes[3] : (gp.axes[1] || 0);
         const btn = i => !!(gp.buttons[i] && gp.buttons[i].pressed);
-        if (this.edge(side + 'Face', btn(4))) { inp.boost = true; if (side === 'right') inp.start = true; }
-        if (this.edge(side + 'Stick', btn(3))) inp.pausePress = true; // click either stick: pause menu
+        // Push either stick down to boost; keep it pushed to keep boosting. A or X turns you right side up (A also selects in menus).
+        if (this.edge(side + 'Stick', btn(3))) inp.boost = true;
+        if (btn(3)) inp.boostHeld = true;
+        if (this.edge(side + 'Face', btn(4))) { inp.level = true; if (side === 'right') inp.start = true; }
         if (side === 'left') { inp.moveX = sx; inp.moveY = -sy; if (this.edge('lY', btn(5))) inp.pausePress = true; } // Y: pause menu
         else { inp.turnX = sx; inp.climb = -sy; if (this.edge('rB', btn(5))) inp.power = true; }
         const gripPose = frame && ref && src.gripSpace ? frame.getPose(src.gripSpace, ref) : null;
@@ -524,7 +544,9 @@ AFRAME.registerComponent('surge-game', {
       inp.moveY = (k.KeyW ? 1 : 0) - (k.KeyS ? 1 : 0);
       inp.moveX = (k.KeyD ? 1 : 0) - (k.KeyA ? 1 : 0);
       inp.climb = (k.KeyE ? 1 : 0) - (k.KeyQ ? 1 : 0);
-      inp.boost = this.edge('kBoost', !!(k.ShiftLeft || k.ShiftRight));
+      inp.boostHeld = !!(k.ShiftLeft || k.ShiftRight);
+      inp.boost = this.edge('kBoost', inp.boostHeld);
+      inp.level = this.edge('kL', !!k.KeyL);
       inp.start = this.edge('kEnter', !!(k.Enter || k.NumpadEnter));
       inp.power = this.edge('kC', !!k.KeyC);
       inp.pass = this.edge('kF', !!k.KeyF);
@@ -564,7 +586,7 @@ AFRAME.registerComponent('surge-game', {
       this.updateHelp(inp); this.updateHud(dt); return;
     }
     this.helpPanel.mesh.visible = false;
-    // Pause menu (Y or click a stick; PC: P or Esc). The match clock, bots and disc all stop while it's open.
+    // Pause menu (Y; PC: P or Esc). The match clock, bots and disc all stop while it's open.
     if (inp.pausePress) { if (this.pauseOpen) this.closePause(); else this.openPause(); }
     if (this.pauseOpen && !this.canPause()) this.closePause(true);
     this.menuPanel.mesh.visible = !this.pauseOpen && (this.state === 'ready' || this.state === 'over');
@@ -727,12 +749,12 @@ AFRAME.registerComponent('surge-game', {
   },
   updatePause(inp) {
     const panel = this.pausePanel;
-    const key = `${this.score.blue}:${this.score.orange}:${this.inVR}:${this.realm.id}:${this.arena.id}:${this.mode.id}:${this.easy}`;
+    const key = `${this.score.blue}:${this.score.orange}:${this.inVR}:${this.realm.id}:${this.arena.id}:${this.mode.id}:${this.easy}:${this.flight}`;
     if (key !== this.pauseKey) {
       this.pauseKey = key;
       const model = { where: `${this.realm.name}  ·  ${this.arena.name}  ·  ${this.mode.name}`, blue: this.score.blue, orange: this.score.orange, inVR: this.inVR,
                       reach: this.inVR ? `ARMS: ${this.easy ? 'EASY REACH (point + trigger)' : 'FULL MOTION (swing to throw)'}` : 'ARMS: EASY REACH (PC)',
-                      exitLabel: window.SURGE_APP ? 'QUIT SURGE LEAGUE' : 'EXIT TO HOME SCREEN' };
+                      flight: FLIGHT_LABEL[this.flight], exitLabel: window.SURGE_APP ? 'QUIT SURGE LEAGUE' : 'EXIT TO HOME SCREEN' };
       panel.set((g, W, H, p) => paintPause(g, W, H, p, model));
     }
     panel.update();
@@ -746,6 +768,10 @@ AFRAME.registerComponent('surge-game', {
     if (pick.id === 'resume') this.closePause();
     else if (pick.id === 'help') this.openHelp();
     else if (pick.id === 'reach') { if (this.inVR) { this.modeLock = this.easy ? 'full' : 'easy'; this.setEasy(this.modeLock === 'easy', 'you chose it'); } }
+    else if (pick.id === 'flight') {
+      this.flight = FLIGHT_MODES[(FLIGHT_MODES.indexOf(this.flight) + 1) % FLIGHT_MODES.length];
+      this.save.flight = this.flight; writeSave(this.save); beep(640, 70, 0.06);
+    }
     else if (pick.id === 'restart') { this.closePause(true); this.newMatch(); this.startCountdown(3); }
     else if (pick.id === 'menu') { this.closePause(true); this.newMatch(); }
     else if (pick.id === 'v1') this.leaveTo('v1/');
@@ -1106,16 +1132,26 @@ AFRAME.registerComponent('surge-game', {
       }
       const dz = v => Math.abs(v) < 0.15 ? 0 : v;
       const climb = Math.abs(inp.turnX) > 0.6 ? 0 : dz(inp.climb);
-      const thrust = new T.Vector3().addScaledVector(inp.fwd, dz(inp.moveY)).addScaledVector(inp.right, dz(inp.moveX)).addScaledVector(UP, climb);
+      // Stick forward flies where your hands point (classic: where you look). Sideways slides, right stick up/down rises and sinks
+      // along your own body, so it all still works upside down.
+      const fwd = this.updateSteer(inp, dt), right = new T.Vector3().crossVectors(fwd, inp.rigUp);
+      if (right.lengthSq() < 1e-4) right.copy(inp.right); else right.normalize();
+      const thrust = new T.Vector3().addScaledVector(fwd, dz(inp.moveY)).addScaledVector(right, dz(inp.moveX)).addScaledVector(inp.rigUp, climb);
       if (thrust.lengthSq() > 1) thrust.normalize();
-      const boostDir = thrust.lengthSq() > 0.01 ? thrust.clone().normalize() : inp.fwd.clone();
+      const boostDir = thrust.lengthSq() > 0.01 && dz(inp.moveY) >= 0 ? thrust.clone().normalize() : fwd.clone();
       if (live && inp.boost && this.boostCool === 0 && this.energy >= BOOST_COST) {
         this.vel.addScaledVector(boostDir, BOOST_BURST);
         this.useEnergy(BOOST_COST);
         this.boostT = BOOST_TIME; this.boostCool = BOOST_COOL; this.boostDir = boostDir.clone(); this.impactFlash = 0.5;
         beep(160, 300, 0.1, 'sawtooth');
       }
+      // A boost keeps following your hands, and keeps going while the stick stays pushed down (until the energy runs out).
+      if (this.boostT > 0) {
+        this.boostDir.lerp(boostDir, 1 - Math.exp(-10 * dt)).normalize();
+        if (live && inp.boostHeld && this.energy > 0) { this.boostT = Math.max(this.boostT, 0.12); this.useEnergy(BOOST_HOLD_COST * dt); }
+      }
       this.boosting = this.boostT > 0;
+      this.orientRig(inp, dt, live, thrust);
       const speedMul = (slip ? 2 : 1) * (this.buffIs('player', 'speed') ? 1.7 : 1);
       if (!live) this.vel.multiplyScalar(Math.exp(-3 * dt));
       else if (this.easy) {
@@ -1129,6 +1165,8 @@ AFRAME.registerComponent('surge-game', {
           if (flow) target.z += flow * CURRENT_SPEED * 0.6;
           this.vel.lerp(target, 1 - Math.exp(-EASY_RESPONSE * dt));
         }
+      } else if (this.boosting) {
+        this.vel.lerp(this.boostDir.clone().multiplyScalar(BOOST_MAX * 0.9 * speedMul), 1 - Math.exp(-3 * dt));
       } else {
         this.vel.addScaledVector(thrust, THRUST * (slip ? 1.6 : 1) * dt);
         applyCurrent(this.winds, this.headPos, this.vel, dt);
@@ -1149,10 +1187,77 @@ AFRAME.registerComponent('surge-game', {
     if (this.energyIdle > REGEN_DELAY) this.energy = Math.min(ENERGY_MAX, this.energy + REGEN * dt);
   },
 
-  snapTurn(deg, headBefore) {
-    this.rig.rotation.y += deg * DEG;
+  snapTurn(deg) { this.turnAboutHead(() => this.rig.rotateY(deg * DEG)); },
+
+  // Turns the ride (and you with it) around your head, so the turn never slides you sideways.
+  turnAboutHead(turn) {
+    const cam = this.headEl.getObject3D('camera');
     this.rig.updateMatrixWorld(true);
-    this.rig.position.add(headBefore.sub(this.headEl.getObject3D('camera').getWorldPosition(new T.Vector3())));
+    const before = cam.getWorldPosition(new T.Vector3());
+    turn();
+    this.rig.updateMatrixWorld(true);
+    this.rig.position.add(before.sub(cam.getWorldPosition(new T.Vector3())));
+  },
+
+  // Steering: the average of the hands that aren't busy (holding the disc or gripping), smoothed a little.
+  // With both busy it keeps the last direction. Classic flight (and the PC) steer where you look.
+  updateSteer(inp, dt) {
+    const d = this.disc, q = this.rig.quaternion;
+    let want = null;
+    if (inp.inVR && this.flight !== 'head') {
+      const sum = new T.Vector3(); let n = 0;
+      for (const h of inp.hands) {
+        if (h.desktop || h.grip || (d.holder === 'player' && d.hand === h.side)) continue;
+        sum.add(h.dir); n++;
+      }
+      if (n && sum.length() > 0.5) {
+        // Relaxed hands point a little down; a small lift makes them fly level.
+        const local = sum.normalize().applyQuaternion(q.clone().invert());
+        const pitch = Math.min(Math.PI / 2, Math.asin(Math.max(-1, Math.min(1, local.y))) + STEER_LIFT), flat = Math.hypot(local.x, local.z);
+        if (flat > 1e-3) { local.x *= Math.cos(pitch) / flat; local.z *= Math.cos(pitch) / flat; local.y = Math.sin(pitch); }
+        want = local.applyQuaternion(q);
+      }
+      this.handSteer = n > 0;
+    } else { want = inp.fwd; this.handSteer = false; }
+    if (!this.steerDir) this.steerDir = inp.fwd.clone();
+    if (want) this.steerDir.lerp(want, 1 - Math.exp(-STEER_SMOOTH * dt)).normalize();
+    return this.steerDir;
+  },
+
+  // Free flight: point past the comfortable range and your ride turns to follow, so pointing both hands up and boosting
+  // loops you over backwards, and you can fly upside down with the arena overhead. Hands-level flight only turns left/right and
+  // eases back upright. A / X (PC: L) turns you right side up again in any mode.
+  orientRig(inp, dt, live, thrust) {
+    const q = this.rig.quaternion, start = q.clone();
+    if (inp.level && live) { this.levelT = 1.5; beep(520, 120, 0.06, 'triangle'); }
+    const tilted = inp.rigUp.y < 0.9995;
+    const engaged = live && (this.boosting || thrust.length() > 0.3);
+    this.turnEase = (this.turnEase || 0) + ((engaged ? 1 : 0) - (this.turnEase || 0)) * (1 - Math.exp(-6 * dt));
+    if (tilted && (this.levelT > 0 || this.flight !== 'free' || !live)) {
+      // Upright again, keeping the direction you're looking.
+      const hl = this.headFwd.clone().applyQuaternion(start.clone().invert()), hw = this.headFwd;
+      const localYaw = Math.hypot(hl.x, hl.z) > 0.2 ? Math.atan2(-hl.x, -hl.z) : 0;
+      const ref = Math.hypot(hw.x, hw.z) > 0.2 ? hw : this.vel.lengthSq() > 1 ? this.vel : new T.Vector3(0, 0, -1).applyQuaternion(start);
+      const target = new T.Quaternion().setFromAxisAngle(UP, Math.atan2(-ref.x, -ref.z) - localYaw);
+      this.turnAboutHead(() => q.slerp(target, 1 - Math.exp(-(this.levelT > 0 ? 3.5 : !live ? 6 : 2.5) * dt)));
+    } else if (this.handSteer && this.turnEase > 0.01 && this.flight !== 'head') {
+      const qi = start.clone().invert(), a = this.steerDir.clone().applyQuaternion(qi);
+      const hf = this.headFwd.clone().applyQuaternion(qi); hf.y = 0;
+      if (hf.lengthSq() < 0.04) hf.set(0, 0, -1); hf.normalize();
+      const pitch = Math.asin(Math.max(-1, Math.min(1, a.y))), flat = new T.Vector3(a.x, 0, a.z);
+      let yaw = 0;
+      if (flat.lengthSq() > 1e-4) { flat.normalize(); yaw = Math.atan2(hf.z * flat.x - hf.x * flat.z, hf.dot(flat)); }
+      const rate = (angle, free) => { const ex = Math.abs(angle) - free; return ex > 0 ? Math.sign(angle) * Math.min(TURN_MAX, ex * TURN_GAIN) : 0; };
+      const pr = this.flight === 'free' ? rate(pitch, FREE_PITCH) : 0, yr = rate(yaw, FREE_YAW) * Math.cos(pitch), k = this.turnEase * dt;
+      if (pr || yr) {
+        const axis = new T.Vector3().crossVectors(hf, UP).normalize();
+        this.turnAboutHead(() => q.multiply(new T.Quaternion().setFromAxisAngle(UP, yr * k)).multiply(new T.Quaternion().setFromAxisAngle(axis, pr * k)));
+      }
+    }
+    if (this.levelT > 0) this.levelT = tilted ? Math.max(0, this.levelT - dt) : 0;
+    // How fast the view is turning, for the comfort vignette.
+    const turned = dt > 0 ? 2 * Math.acos(Math.min(1, Math.abs(start.dot(q)))) / dt : 0;
+    this.turnRate = (this.turnRate || 0) + (turned - (this.turnRate || 0)) * (1 - Math.exp(-10 * dt));
   },
 
   // ---------------------------------------------------------------- the disc
@@ -1392,7 +1497,7 @@ AFRAME.registerComponent('surge-game', {
     const to = tmp3.subVectors(pos, this.headPos), dist = to.length();
     if (dist < 1) return;
     to.divideScalar(dist);
-    const right = new T.Vector3().crossVectors(this.headFwd, UP);
+    const right = new T.Vector3().crossVectors(this.headFwd, UP.clone().applyQuaternion(this.rig.quaternion));
     if (right.lengthSq() < 1e-4) return;
     right.normalize();
     this.hitBuzzAt = this.time + 0.15;
@@ -1704,7 +1809,9 @@ AFRAME.registerComponent('surge-game', {
     if (this.orbs.some(o => o.pos.distanceTo(this.headPos) < 30)) this.tip('orb');
     if (this.mode.core) this.tip('core');
     if (this.prisms.length) this.tip('prism');
-    if (playing > 3) this.tip('boost');
+    if (playing > 2 && this.flight !== 'head') this.tip('steer');
+    if (playing > 3) this.tip('boost2');
+    if (playing > 14 && this.flight === 'free') this.tip('flip');
     if (d.holder === null && d.pos.distanceTo(this.headPos) < 6) this.tip('grab');
     if (d.holder === 'player') {
       this.tip(this.easy && this.inVR ? 'easyThrow' : 'throw');
@@ -1836,6 +1943,7 @@ AFRAME.registerComponent('surge-game', {
     wp.needsUpdate = true;
 
     const world = this.worlds[this.realm.id];
+    if (patchTex) patchTex.offset.set(Math.sin(this.time * 0.23) * 0.0015, Math.sin(this.time * 0.31) * 0.0012); // leaves stirring
     world.particles.userData.update(dt, this.time);
     for (const g of world.spin) g.obj.rotateZ(g.speed * dt);
     for (const u of world.updates) u(dt, this.time);
@@ -1880,6 +1988,13 @@ AFRAME.registerComponent('surge-game', {
       this.setBeam(arm, h.shoulder, h.glove);
       if (this.easy) this.setBeam(aim, h.glove, h.glove.clone().addScaledVector(h.dir, 15)); else aim.visible = false;
     }
+    const sm = this.steerMark, showSteer = this.live && this.inVR && this.handSteer && this.steerDir && !this.anchors.left && !this.anchors.right;
+    sm.visible = !!showSteer;
+    if (showSteer) {
+      sm.position.copy(this.headPos).addScaledVector(this.steerDir, 6); sm.up.copy(UP).applyQuaternion(this.rig.quaternion); sm.lookAt(this.headPos);
+      sm.material.opacity = 0.12 + Math.min(1, this.thrustLevel || 0) * 0.4;
+      sm.material.color.set(this.boosting ? '#ffd166' : '#66ffff');
+    }
     const f = this.energy / ENERGY_MAX;
     this.energyDots.forEach((m, i) => { const on = f * 10 > i + 0.5; m.material.color.set(on ? '#66ffff' : '#203040'); });
     const glowMesh = this.$('thrusterGlow').getObject3D('mesh');
@@ -1893,7 +2008,8 @@ AFRAME.registerComponent('surge-game', {
       v.material.map = vignetteTexture(); v.material.needsUpdate = true; v.renderOrder = 999;
       this.vigMat = v.material;
     }
-    const target = Math.min(0.85, this.accelMag / 30 + Math.max(0, this.vel.length() - 14) / 14 + this.impactFlash * 0.8);
+    // Darker edges when you speed up, hit something, or your ride is turning (loops and rolls), which keeps flips comfortable.
+    const target = Math.min(0.85, this.accelMag / 30 + Math.max(0, this.vel.length() - 14) / 14 + this.impactFlash * 0.8 + Math.max(0, (this.turnRate || 0) - 0.3) * 0.35 * (this.save.comfort === false ? 0 : 1));
     this.vig += (target - this.vig) * (1 - Math.exp(-8 * dt));
     this.vigMat.opacity = this.vig;
   },
@@ -1909,7 +2025,7 @@ AFRAME.registerComponent('surge-game', {
   updateHud(dt) {
     const inMenu = this.state === 'ready' || this.state === 'over' || this.pauseOpen;
     this.scoreShowT = Math.max(0, this.scoreShowT - dt);
-    const lookDown = this.inVR ? this.headFwd.y < -0.45 : !!this.keys.Tab;
+    const lookDown = this.inVR ? this.headFwd.clone().applyQuaternion(this.rig.quaternion.clone().invert()).y < -0.45 : !!this.keys.Tab;
     const want = !inMenu && this.state !== 'portal' && (this.state === 'countdown' || this.state === 'scored' || this.scoreShowT > 0 ||
                  (this.state === 'playing' && this.timeLeft < 10) || lookDown);
     this.scoreAlpha += ((want ? 1 : 0) - this.scoreAlpha) * Math.min(1, dt * (want ? 10 : 4));
@@ -1940,7 +2056,7 @@ AFRAME.registerComponent('surge-game', {
       fwd.y = Math.max(-0.3, Math.min(0.3, fwd.y)); fwd.normalize();
       const target = head.addScaledVector(fwd, 1.5).add(new T.Vector3(0, opts.big ? 0.05 : -0.2, 0)), tm = this.toastPanel.mesh;
       if (!this.toastPlaced) { tm.position.copy(target); this.toastPlaced = true; } else tm.position.lerp(target, 1 - Math.exp(-5 * dt));
-      tm.lookAt(this.headPos);
+      tm.up.copy(UP).applyQuaternion(this.rig.quaternion); tm.lookAt(this.headPos);
     } else this.toastPlaced = false;
 
     const page = document.getElementById('status');

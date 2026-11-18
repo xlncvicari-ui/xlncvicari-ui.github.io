@@ -208,8 +208,8 @@ function callout(g, from, to, title, sub, align, on) {
   g.beginPath(); g.moveTo(...from); g.lineTo(to[0] + (align === 'right' ? 12 : -12), to[1]); g.stroke();
   g.fillStyle = on ? '#66ffff' : '#8fa8c4'; g.beginPath(); g.arc(...from, 6, 0, Math.PI * 2); g.fill();
   g.textAlign = align; g.textBaseline = 'middle';
-  g.fillStyle = '#eaf4ff'; g.font = uiFont(30, 900); g.fillText(title, to[0], to[1] - 15);
-  g.fillStyle = '#9db4cc'; g.font = uiFont(22, 600); g.fillText(sub, to[0], to[1] + 17);
+  g.fillStyle = '#eaf4ff'; fitFont(g, title, 320, 30, 900); g.fillText(title, to[0], to[1] - 15);
+  g.fillStyle = '#9db4cc'; fitFont(g, sub, 320, 22, 600); g.fillText(sub, to[0], to[1] + 17);
 }
 
 // How to play: both controllers with every button labeled, the goal, and ways to score.
@@ -224,16 +224,16 @@ function paintHowTo(g, W, H, panel, m) {
     const lx = 340, rx = W - 340, ys = [170, 265, 360, 455, 550];
     callout(g, L.trigger, [lx, ys[0]], 'TRIGGER  PASS', 'point at your ally', 'right');
     callout(g, L.y, [lx, ys[1]], 'Y  PAUSE', 'menu, settings, exit', 'right');
-    callout(g, L.stick, [lx, ys[2]], 'STICK  FLY', 'goes where you look', 'right');
-    callout(g, L.x, [lx, ys[3]], 'X  BOOST', 'quick burst of speed', 'right');
+    callout(g, L.stick, [lx, ys[2]], 'STICK  FLY · PUSH = BOOST', 'go where your hands point', 'right');
+    callout(g, L.x, [lx, ys[3]], 'X  RIGHT SIDE UP', 'after flips and loops', 'right');
     callout(g, L.grip, [lx, ys[4]], 'GRIP  GRAB', 'disc, or hold an air pocket', 'right');
     callout(g, R.trigger, [rx, ys[0]], 'TRIGGER  PULL', 'point at the disc', 'left');
     callout(g, R.b, [rx, ys[1]], 'B  POWER', m.power, 'left');
-    callout(g, R.stick, [rx, ys[2]], 'STICK  UP / DOWN', 'sideways to turn', 'left');
-    callout(g, R.a, [rx, ys[3]], 'A  BOOST', 'and select in menus', 'left');
+    callout(g, R.stick, [rx, ys[2]], 'STICK  UP/DOWN · PUSH = BOOST', 'sideways to turn', 'left');
+    callout(g, R.a, [rx, ys[3]], 'A  RIGHT SIDE UP', 'and select in menus', 'left');
     callout(g, R.grip, [rx, ys[4]], 'GRIP  THROW', 'swing and let go', 'left');
   } else {
-    const keys = [['WASD', 'fly where you look'], ['E / Q', 'up / down'], ['SHIFT', 'boost'], ['HOLD G', 'pull the disc'], ['SPACE', 'throw'], ['F', 'pass'], ['C', 'realm power'], ['P', 'pause']];
+    const keys = [['WASD', 'fly where you look'], ['E / Q', 'up / down'], ['SHIFT', 'boost (hold to keep going)'], ['L', 'right side up'], ['HOLD G', 'pull the disc'], ['SPACE', 'throw'], ['F', 'pass'], ['C', 'realm power'], ['P', 'pause']];
     keys.forEach(([k, v], i) => {
       const x = 180 + (i % 2) * 760, y = 170 + Math.floor(i / 2) * 105;
       g.fillStyle = 'rgba(102,255,255,0.15)'; rrect(g, x, y - 36, 190, 72, 16); g.fill();
@@ -253,7 +253,7 @@ function paintHowTo(g, W, H, panel, m) {
     g.fillStyle = '#9db4cc'; g.font = uiFont(22, 600); g.fillText(b, x, y0 + 140);
   });
   g.fillStyle = '#9db4cc'; g.font = uiFont(24, 600); g.textAlign = 'center';
-  g.fillText('Steal from the front, never from behind.  Boost into a rival to knock the disc loose.  Grab glowing orbs for power-ups.', W / 2, 900);
+  g.fillText(m.inVR ? 'Point both hands up and boost to loop over backwards.  Boost into a rival to knock the disc loose.' : 'Steal from the front, never from behind.  Boost into a rival to knock the disc loose.  Grab glowing orbs for power-ups.', W / 2, 900);
   const b = panel.button({ id: 'help-close', x: W / 2 - 220, y: 935, w: 440, h: 0, row: 0, col: 0 });
   b.h = H - 935 - 24;
   g.fillStyle = '#66ffff'; rrect(g, b.x, b.y, b.w, b.h, 22); g.fill();
@@ -441,7 +441,7 @@ function paintStartMenu(g, W, H, panel, m) {
 }
 
 // ------------------------------------------------------------------ pause menu
-const PAUSE_W = 1.15, PAUSE_H = 1.36;
+const PAUSE_W = 1.15, PAUSE_H = 1.48;
 function paintPause(g, W, H, panel, m) {
   const ink = '#eaf4ff', dim = '#8fa8c4';
   g.fillStyle = 'rgba(8,16,32,0.95)'; rrect(g, 0, 0, W, H, 36); g.fill();
@@ -453,7 +453,7 @@ function paintPause(g, W, H, panel, m) {
   g.fillStyle = '#3d8bff'; g.textAlign = 'right'; g.fillText(`BLUE ${m.blue}`, W / 2 - 24, 176);
   g.fillStyle = dim; g.textAlign = 'center'; g.fillText(':', W / 2, 174);
   g.fillStyle = '#ff7a2f'; g.textAlign = 'left'; g.fillText(`${m.orange} ORANGE`, W / 2 + 24, 176);
-  const items = [['resume', 'RESUME', '#66ffff'], ['help', 'HOW TO PLAY (CONTROLS)', '#7a8aa0'], ['reach', m.reach, '#7a8aa0'],
+  const items = [['resume', 'RESUME', '#66ffff'], ['help', 'HOW TO PLAY (CONTROLS)', '#7a8aa0'], ['reach', m.reach, '#7a8aa0'], ['flight', m.flight, '#7a8aa0'],
                  ['restart', 'RESTART MATCH', '#7a8aa0'], ['menu', 'CHANGE REALM, ARENA OR MODE', '#7a8aa0'],
                  ['v1', 'PLAY VERSION 1 (CLASSIC)', '#7a8aa0'], ['home', m.exitLabel || 'EXIT TO HOME SCREEN', '#c0605a']];
   items.forEach(([id, label, color], i) => {
