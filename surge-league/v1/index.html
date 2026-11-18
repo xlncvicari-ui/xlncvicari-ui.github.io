@@ -1,0 +1,1199 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Surge League v1</title>
+<script src="/surge-league/lib/aframe.min.js"></script><script src="/surge-league/lib/offline.js"></script>
+<style>
+  html, body { margin: 0; height: 100%; background: #0b1a2b; font-family: system-ui, sans-serif; }
+  #help { position: fixed; left: 12px; top: 12px; z-index: 10; max-width: 440px; max-height: calc(100vh - 24px); overflow: auto;
+          background: rgba(8,18,32,.85); color: #e8f3ff; padding: 12px 14px; border-radius: 10px; font-size: 14px; line-height: 1.45; box-sizing: border-box; }
+  #help h1 { font-size: 18px; margin: 0 0 6px; }
+  #help h1 small { font-weight: 400; color: #9bb3cc; font-size: 12px; }
+  #help b { color: #7ff; }
+  #help .cols { display: flex; gap: 14px; margin-top: 8px; }
+  #score { font-weight: 600; margin-top: 8px; color: #ffd166; white-space: pre-line; }
+  #help button { margin-top: 8px; background: #1e3a5c; color: #e8f3ff; border: 0; border-radius: 6px; padding: 4px 10px; cursor: pointer; }
+  #cross { position: fixed; left: 50%; top: 50%; width: 8px; height: 8px; margin: -4px 0 0 -4px; border: 2px solid #fff;
+           border-radius: 50%; z-index: 9; pointer-events: none; opacity: .7; }
+</style>
+<script>
+const T = AFRAME.THREE;
+const STORE_KEY = 'vr-games-surge-league-v1';
+const DEG = Math.PI / 180;
+
+// Frisbee-shaped arena: a wide round field, blue half at +z, orange half at -z.
+const ARENA_R = 60, Y_MIN = 2, Y_MAX = 40, GOAL_Z = 52;
+const PLAYER_R = 0.6, DISC_R = 0.32, BOT_R = 0.8, SNITCH_R = 0.2;
+
+const THRUST = 12, MAX_SPEED = 12, DRAG = 0.35;
+const BOOST_BURST = 12, BOOST_MAX = 24, BOOST_TIME = 0.6, BOOST_COOL = 0.8, BOOST_COST = 20;
+const EASY_SPEED = 9, EASY_RESPONSE = 4;
+const ENERGY_MAX = 100, REGEN = 20, REGEN_DELAY = 0.6, PUSH_COST = 15;
+const BOUNCE_PLAYER = 0.5, BOUNCE_DISC = 0.8, BOUNCE_BOT = 0.3;
+
+// Air pockets: grip to hold on, pull yourself along, let go to fling.
+const POCKET_R = 0.9, LAUNCH_GAIN = 1.6, LAUNCH_MAX = 22;
+
+// Long arms: past ARM_START from the shoulder, the glove reaches out faster than your real hand.
+const ARM_START = 0.32, ARM_GAIN = 10, ARM_MAX = 2.4;
+const THROW_GAIN = 1.3, DISC_MAX = 40, DISC_DRAG = 0.15;
+const GRAB_R = 0.6, SNAP_R = 1.8, SNAP_SPEED = 30;
+const EASY_PULL_RANGE = 35, PULL_SPEED = 18, EASY_THROW = 26, PUSH_RANGE = 12, PUSH_POWER = 16;
+const THROW_ASSIST = 5 * DEG, EASY_ASSIST = 8 * DEG;
+
+const BOT_SPEED = 11, BOT_ACCEL = 16, BOT_THROW = 26, BOT_SHOOT = 16, BOT_CATCH_R = 1.2;
+// Steals only work from the carrier's front or side: dot(carrier facing, direction to thief) must be above this.
+const STEAL_R = 1.6, BEHIND_DOT = -0.25;
+const SNITCH_SPEED = 16, SNITCH_FIRST = 45, SNITCH_EVERY = 60, SNITCH_POINTS = 3;
+const ROUND_SECONDS = 240;
+
+const QUIET_SPEED = 0.12, QUIET_SECONDS = 15, WEAK_THROW = 1.8, STRONG_SWING = 2.5;
+
+const TEAM_NAME = { blue: 'BLUE', orange: 'ORANGE' };
+const TEAM_COLOR = { blue: '#3d8bff', orange: '#ff7a2f' };
+const OTHER = { blue: 'orange', orange: 'blue' };
+const OWN_Z = { blue: GOAL_Z, orange: -GOAL_Z };
+
+// Each team gets the same three hoops: small side hoops are worth 2, the tall middle hoop 1.
+const HOOP_LAYOUT = [{ x: -14, y: 13, size: 1.6, pts: 2 }, { x: 0, y: 20, size: 2.1, pts: 1 }, { x: 14, y: 13, size: 1.6, pts: 2 }];
+// One quarter of the field; mirrored to all four quarters so left, right and both halves match.
+const ROCKS_QUARTER = [{ x: 24, y: 10, z: 30, r: 2.2 }, { x: 30, y: 24, z: 12, r: 1.8 }];
+const ROCKS_MIDDLE = [{ x: 0, y: 30, z: 26, r: 2.4 }];
+const POCKETS_QUARTER = [{ x: 20, y: 14, z: 22 }, { x: 26, y: 18, z: 8 }, { x: 14, y: 22, z: 38 }];
+const POCKETS_MIDDLE = [{ x: 0, y: 14, z: 32 }, { x: 0, y: 21, z: 14 }];
+const POCKETS_CENTER = [{ x: -10, y: 12, z: 0 }, { x: 10, y: 12, z: 0 }];
+
+const BOT_DEFS = [
+  { team: 'blue', label: 'ALLY', start: [8, 14, 40], lane: 1 },
+  { team: 'orange', label: 'ORANGE 1', start: [-8, 14, -40], lane: -1 },
+  { team: 'orange', label: 'ORANGE 2', start: [8, 14, -40], lane: 1, seeker: true }
+];
+const PLAYER_START = new T.Vector3(0, 14, 40);
+const UP = new T.Vector3(0, 1, 0);
+const tmp = new T.Vector3(), tmp2 = new T.Vector3();
+const cA = new T.Vector3(), cB = new T.Vector3(), cC = new T.Vector3(), cN = new T.Vector3();
+
+function mirror4(list) {
+  const out = [];
+  for (const p of list) for (const sx of [1, -1]) for (const sz of [1, -1]) out.push({ ...p, x: p.x * sx, z: p.z * sz });
+  return out;
+}
+function mirrorZ(list) { return list.flatMap(p => [p, { ...p, z: -p.z }]); }
+
+function loadBest() { try { return (JSON.parse(localStorage.getItem(STORE_KEY)) || {}).bestPoints || 0; } catch (e) { return 0; } }
+function saveBest(bestPoints) { try { localStorage.setItem(STORE_KEY, JSON.stringify({ bestPoints })); } catch (e) {} }
+
+let audioCtx = null;
+function beep(freq, ms, vol = 0.12, type = 'sine', delay = 0) {
+  try {
+    audioCtx = audioCtx || new (window.AudioContext || window.webkitAudioContext)();
+    if (audioCtx.state === 'suspended') audioCtx.resume();
+    const t0 = audioCtx.currentTime + delay, o = audioCtx.createOscillator(), g = audioCtx.createGain();
+    o.type = type; o.frequency.value = freq;
+    g.gain.setValueAtTime(vol, t0);
+    g.gain.exponentialRampToValueAtTime(0.001, t0 + ms / 1000);
+    o.connect(g).connect(audioCtx.destination);
+    o.start(t0); o.stop(t0 + ms / 1000);
+  } catch (e) {}
+}
+function pulse(hand, strength, ms) { try { if (hand && hand.haptic) hand.haptic.pulse(strength, ms); } catch (e) {} }
+
+function reflect(vel, n, bounce) {
+  const vn = vel.dot(n);
+  if (vn >= 0) return 0;
+  vel.addScaledVector(n, -(1 + bounce) * vn);
+  return -vn;
+}
+
+// Keeps a sphere inside the arena and out of obstacles, bouncing its velocity. Returns the hardest hit speed.
+function resolveSphere(pos, vel, r, bounce, obstacles) {
+  let impact = 0;
+  const rr = Math.hypot(pos.x, pos.z);
+  if (rr > ARENA_R - r) {
+    const nx = pos.x / rr, nz = pos.z / rr;
+    pos.x = nx * (ARENA_R - r); pos.z = nz * (ARENA_R - r);
+    cN.set(-nx, 0, -nz);
+    impact = Math.max(impact, reflect(vel, cN, bounce));
+  }
+  if (pos.y < Y_MIN + r) { pos.y = Y_MIN + r; if (vel.y < 0) { impact = Math.max(impact, -vel.y); vel.y *= -bounce; } }
+  if (pos.y > Y_MAX - r) { pos.y = Y_MAX - r; if (vel.y > 0) { impact = Math.max(impact, vel.y); vel.y *= -bounce; } }
+  for (const o of obstacles) {
+    if (o.type === 'ball') {
+      cA.subVectors(pos, o.c);
+      const d = cA.length(), min = o.r + r;
+      if (d < min && d > 1e-6) {
+        cA.divideScalar(d);
+        pos.copy(o.c).addScaledVector(cA, min);
+        impact = Math.max(impact, reflect(vel, cA, bounce));
+      }
+      continue;
+    }
+    cA.subVectors(pos, o.c);
+    cB.copy(cA).clamp(o.nhalf, o.half);
+    cC.subVectors(cA, cB);
+    const d = cC.length();
+    if (d >= r) continue;
+    if (d < 1e-6) {
+      const px = o.half.x - Math.abs(cA.x), py = o.half.y - Math.abs(cA.y), pz = o.half.z - Math.abs(cA.z);
+      cC.set(0, 0, 0);
+      if (px <= py && px <= pz) { cC.x = Math.sign(cA.x) || 1; cB.x = o.half.x * cC.x; }
+      else if (py <= pz) { cC.y = Math.sign(cA.y) || 1; cB.y = o.half.y * cC.y; }
+      else { cC.z = Math.sign(cA.z) || 1; cB.z = o.half.z * cC.z; }
+    } else {
+      cC.divideScalar(d);
+    }
+    pos.copy(cB).addScaledVector(cC, r).add(o.c);
+    impact = Math.max(impact, reflect(vel, cC, bounce));
+  }
+  return impact;
+}
+
+function vignetteTexture() {
+  const c = document.createElement('canvas'); c.width = c.height = 256;
+  const g = c.getContext('2d'), grd = g.createRadialGradient(128, 128, 0, 128, 128, 128);
+  grd.addColorStop(0, 'rgba(0,0,0,0)'); grd.addColorStop(0.3, 'rgba(0,0,0,0)');
+  grd.addColorStop(0.75, 'rgba(0,0,0,0.9)'); grd.addColorStop(1, 'rgba(0,0,0,1)');
+  g.fillStyle = grd; g.fillRect(0, 0, 256, 256);
+  return new T.CanvasTexture(c);
+}
+
+AFRAME.registerComponent('surge-game', {
+  init() {
+    this.ready = false;
+    if (this.el.hasLoaded) this.setup(); else this.el.addEventListener('loaded', () => this.setup());
+  },
+
+  setup() {
+    const $ = id => document.getElementById(id);
+    this.rig = $('rig').object3D;
+    this.headEl = $('head');
+    this.discObj = $('disc').object3D;
+    this.discSpinObj = $('discSpin').object3D;
+    this.snitchObj = $('snitch').object3D;
+    this.wings = [$('wingL').object3D, $('wingR').object3D];
+    this.gloveEls = { left: $('gloveL'), right: $('gloveR') };
+    this.thrusterGlow = $('thrusterGlow');
+    this.hudText = $('hudText');
+    this.energyBar = $('energyBar').object3D;
+    this.scoreEl = $('score');
+    this.disc = { pos: new T.Vector3(), vel: new T.Vector3(), quat: new T.Quaternion(), holder: null, hand: null,
+                  pulledBy: null, snapping: false, lastThrower: null, noCatch: 0, spin: 0, spinAngle: 0 };
+    this.snitch = { active: false, pos: new T.Vector3(), vel: new T.Vector3(), target: new T.Vector3(), retarget: 0, nextIn: SNITCH_FIRST };
+    this.vel = new T.Vector3();
+    this.holdVel = new T.Vector3();
+    this.anchors = { left: null, right: null };
+    this.headPos = new T.Vector3();
+    this.headFwd = new T.Vector3(0, 0, -1);
+    this.prevButtons = {};
+    this.track = { left: { real: [], glove: [] }, right: { real: [], glove: [] } };
+    this.keys = {};
+    this.best = loadBest();
+    this.snapArmed = true;
+    this.pingT = 0;
+    this.msg = ''; this.msgT = 0;
+    this.time = 0;
+    this.easy = false;
+    this.modeLock = null;
+    this.quietT = 0; this.weakThrows = 0; this.bigSwings = 0; this.swingCool = 0; this.activity = 1;
+    this.restartHold = 0;
+    this.pauseOpen = false; this.pauseRow = 0;
+    // Headset off (or the Quest menu opened): open the pause menu so the match waits for you.
+    this.el.addEventListener('enter-vr', () => {
+      const session = this.el.renderer.xr.getSession();
+      if (session) session.addEventListener('visibilitychange', () => { if (session.visibilityState === 'hidden') this.openPause(); });
+    });
+    addEventListener('keydown', e => {
+      if (['Space', 'ShiftLeft', 'ShiftRight'].includes(e.code)) e.preventDefault();
+      this.keys[e.code] = true;
+    });
+    addEventListener('keyup', e => { this.keys[e.code] = false; });
+    this.buildWorld();
+    this.beams = { pull: this.makeBeam(0x8ff7ff, 0.8, 0.015), armL: this.makeBeam(0x66ffff, 0.55, 0.035), armR: this.makeBeam(0x66ffff, 0.55, 0.035),
+                   aimL: this.makeBeam(0xffffff, 0.25, 0.006), aimR: this.makeBeam(0xffffff, 0.25, 0.006) };
+    this.newMatch();
+    this.ready = true;
+  },
+
+  add(tag, attrs, parent = this.el) {
+    const e = document.createElement(tag);
+    for (const k in attrs) {
+      const v = attrs[k];
+      e.setAttribute(k, (k === 'material' || k === 'geometry') ? AFRAME.utils.styleParser.parse(v) : v);
+    }
+    parent.appendChild(e);
+    return e;
+  },
+
+  buildWorld() {
+    const add = (t, a, p) => this.add(t, a, p);
+    this.obstacles = [];
+
+    this.hoops = [];
+    for (const team of ['blue', 'orange']) {
+      const z = OWN_Z[team], n = new T.Vector3(0, 0, team === 'blue' ? -1 : 1);
+      const yaw = team === 'blue' ? 180 : 0;
+      for (const hl of HOOP_LAYOUT) {
+        const c = new T.Vector3(hl.x, hl.y, z);
+        const el = add('a-entity', { position: `${c.x} ${c.y} ${c.z}`, rotation: `0 ${yaw} 0` });
+        add('a-torus', { radius: hl.size, 'radius-tubular': 0.12, 'segments-tubular': 48,
+                         material: `color: ${TEAM_COLOR[team]}; emissive: ${TEAM_COLOR[team]}; emissiveIntensity: 0.7` }, el);
+        add('a-cone', { position: '0 0 -1', rotation: '-90 0 0', 'radius-bottom': hl.size, 'radius-top': 0.4, height: 2, 'open-ended': true,
+                        'segments-radial': 14, 'segments-height': 3, material: 'color: #ffffff; wireframe: true; opacity: 0.5; transparent: true' }, el);
+        const label = team === 'blue' ? `DEFEND  ${hl.pts} PT${hl.pts > 1 ? 'S' : ''}` : `SCORE  ${hl.pts} PT${hl.pts > 1 ? 'S' : ''}`;
+        add('a-text', { value: label, align: 'center', width: 9, color: '#ffffff', position: `0 ${hl.size + 0.9} 0` }, el);
+        const ph = hl.y - hl.size;
+        add('a-cylinder', { position: `${c.x} ${ph / 2} ${c.z}`, radius: 0.18, height: ph, 'segments-radial': 8, color: '#d9d2c3' });
+        const half = new T.Vector3(0.18, ph / 2, 0.18);
+        this.obstacles.push({ type: 'box', c: new T.Vector3(c.x, ph / 2, c.z), half, nhalf: half.clone().negate() });
+        this.hoops.push({ ...hl, team, c, n, el, flash: 0, mat: null });
+      }
+    }
+
+    this.rocks = [...mirror4(ROCKS_QUARTER), ...mirrorZ(ROCKS_MIDDLE)].map((p, i) => {
+      const el = add('a-entity', {
+        position: `${p.x} ${p.y} ${p.z}`, rotation: `${i * 37} ${i * 53} ${i * 21}`, scale: '1 0.8 1.1',
+        geometry: `primitive: dodecahedron; radius: ${p.r * 1.05}`,
+        material: 'color: #8b8378; roughness: 0.9; flatShading: true; transparent: true; opacity: 1'
+      });
+      const c = new T.Vector3(p.x, p.y, p.z);
+      this.obstacles.push({ type: 'ball', c, r: p.r });
+      return { el, c, r: p.r, mat: null };
+    });
+
+    this.pockets = [...mirror4(POCKETS_QUARTER), ...mirrorZ(POCKETS_MIDDLE), ...POCKETS_CENTER].map((p, i) => {
+      const el = add('a-entity', { position: `${p.x} ${p.y} ${p.z}` });
+      add('a-sphere', { radius: 0.55, 'segments-width': 16, 'segments-height': 12, material: 'shader: flat; color: #cfffff; opacity: 0.12; transparent: true; depthWrite: false' }, el);
+      add('a-sphere', { radius: 0.14, 'segments-width': 10, 'segments-height': 8, material: 'shader: flat; color: #ffffff; opacity: 0.35; transparent: true; depthWrite: false' }, el);
+      return { el, c: new T.Vector3(p.x, p.y, p.z), phase: i * 0.7, glow: 0 };
+    });
+
+    for (let i = 0; i < 8; i++) {
+      const a = (i * 45 + 22.5) * DEG, x = 74 * Math.cos(a), z = 74 * Math.sin(a), c = z > 0 ? TEAM_COLOR.blue : TEAM_COLOR.orange;
+      add('a-cylinder', { position: `${x} 9 ${z}`, radius: 4, height: 18, 'segments-radial': 10, color: '#d8cfbd' });
+      add('a-cone', { position: `${x} 21 ${z}`, 'radius-bottom': 5, 'radius-top': 0, height: 6, 'segments-radial': 10, color: c });
+      add('a-cylinder', { position: `${x} 27 ${z}`, radius: 0.1, height: 6, color: '#555' });
+      add('a-plane', { position: `${x + 1.2} 29 ${z}`, width: 2.4, height: 1.4, material: `shader: flat; side: double; color: ${c}` });
+    }
+    for (let i = 0; i < 16; i++) {
+      const a = (i * 22.5 + 7) * DEG, r = 140 + (i * 37) % 80, y = 60 + (i * 13) % 30;
+      const cloud = add('a-entity', { position: `${r * Math.cos(a)} ${y} ${r * Math.sin(a)}` });
+      for (let j = 0; j < 3; j++) {
+        add('a-sphere', { position: `${(j - 1) * 6} ${j === 1 ? 2 : 0} 0`, radius: 6 + (j === 1 ? 2 : 0), 'segments-width': 10, 'segments-height': 8,
+                          material: 'color: #ffffff; opacity: 0.9; transparent: true' }, cloud);
+      }
+    }
+    for (let i = 0; i < 12; i++) {
+      const a = (i * 30 + 10) * DEG, r = 330, h = 60 + (i * 23) % 50;
+      add('a-cone', { position: `${r * Math.cos(a)} ${h / 2} ${r * Math.sin(a)}`, 'radius-bottom': 50, 'radius-top': 0, height: h, 'segments-radial': 6, color: '#6f8a7a' });
+    }
+
+    this.bots = BOT_DEFS.map(def => {
+      const el = add('a-entity', {});
+      const col = TEAM_COLOR[def.team];
+      add('a-cylinder', { radius: 0.9, height: 0.16, 'segments-radial': 20, material: `color: ${col}; emissive: ${col}; emissiveIntensity: 0.35; metalness: 0.4` }, el);
+      add('a-sphere', { radius: 0.42, position: '0 0.12 0', 'segments-width': 14, 'segments-height': 10, 'theta-length': 90,
+                        material: 'color: #f0f6ff; opacity: 0.7; transparent: true' }, el);
+      add('a-box', { width: 0.5, height: 0.12, depth: 0.1, position: '0 0.15 0.38', material: 'color: #111820; emissive: #66ffff; emissiveIntensity: 0.4' }, el);
+      add('a-text', { value: def.label, align: 'center', width: 4, color: '#ffffff', position: '0 0.9 0', side: 'double' }, el);
+      const start = new T.Vector3(...def.start);
+      return { ...def, el, obj: el.object3D, start, pos: start.clone(), vel: new T.Vector3(),
+               facing: new T.Vector3(0, 0, def.team === 'blue' ? -1 : 1), stun: 0, cool: 0 };
+    });
+  },
+
+  makeBeam(color, opacity, radius) {
+    const geo = new T.CylinderGeometry(radius, radius, 1, 6);
+    geo.translate(0, 0.5, 0);
+    const m = new T.Mesh(geo, new T.MeshBasicMaterial({ color, transparent: true, opacity }));
+    m.visible = false;
+    m.frustumCulled = false;
+    this.el.object3D.add(m);
+    return m;
+  },
+
+  setBeam(m, a, b) {
+    tmp2.subVectors(b, a);
+    const len = tmp2.length();
+    if (len < 0.01) { m.visible = false; return; }
+    m.position.copy(a);
+    m.scale.set(1, len, 1);
+    m.quaternion.setFromUnitVectors(UP, tmp2.divideScalar(len));
+    m.visible = true;
+  },
+
+  teamOf(holder) { return holder === 'player' ? 'blue' : holder.team; },
+  posOf(holder) { return holder === 'player' ? this.headPos : holder.pos; },
+  facingOf(holder) { return holder === 'player' ? this.headFwd : holder.facing; },
+  // True when the thief is in front of or beside the carrier, never behind.
+  fromFrontOrSide(holder, thiefPos) {
+    tmp2.subVectors(thiefPos, this.posOf(holder));
+    if (tmp2.lengthSq() < 1e-6) return true;
+    return this.facingOf(holder).dot(tmp2.normalize()) > BEHIND_DOT;
+  },
+
+  newMatch() {
+    this.state = 'ready';
+    this.score = { blue: 0, orange: 0 };
+    this.timeLeft = ROUND_SECONDS;
+    this.newBest = false;
+    this.snitch.active = false; this.snitch.nextIn = SNITCH_FIRST;
+    this.kickoff();
+  },
+
+  kickoff() {
+    const d = this.disc;
+    d.pos.set(0, 16, 0); d.vel.set(0, 0, 0); d.quat.identity();
+    d.holder = null; d.hand = null; d.pulledBy = null; d.snapping = false; d.lastThrower = null; d.noCatch = 0; d.spin = 0;
+    this.rig.position.copy(PLAYER_START);
+    this.rig.position.y -= 1.3;
+    this.rig.rotation.set(0, 0, 0);
+    this.vel.set(0, 0, 0); this.holdVel.set(0, 0, 0);
+    this.anchors.left = this.anchors.right = null;
+    this.energy = ENERGY_MAX; this.energyIdle = 0;
+    this.boostT = 0; this.boostCool = 0;
+    this.playerStun = 0; this.playerGrace = 0;
+    this.impactFlash = 0; this.accelMag = 0; this.vig = this.vig || 0;
+    for (const b of this.bots) { b.pos.copy(b.start); b.vel.set(0, 0, 0); b.facing.set(0, 0, b.team === 'blue' ? -1 : 1); b.stun = 0; b.cool = 0; }
+    this.hudT = 0;
+  },
+
+  startCountdown(seconds) {
+    this.kickoff();
+    this.state = 'countdown';
+    this.countT = seconds;
+  },
+
+  flash(msg, secs = 1.4) { this.msg = msg; this.msgT = secs; this.hudT = 0; },
+
+  edge(name, down) {
+    const was = this.prevButtons[name];
+    this.prevButtons[name] = down;
+    return down && !was;
+  },
+
+  trackVel(list, p, dt) {
+    list.push({ p: p.clone(), dt });
+    if (list.length > 5) list.shift();
+    let sum = 0;
+    for (let i = 1; i < list.length; i++) sum += list[i].dt;
+    return sum > 0 ? list[list.length - 1].p.clone().sub(list[0].p).divideScalar(sum) : new T.Vector3();
+  },
+
+  readInput(dt) {
+    const inVR = this.el.is('vr-mode') && this.el.renderer.xr.isPresenting;
+    const cam = this.headEl.getObject3D('camera');
+    const fwd = cam.getWorldDirection(new T.Vector3());
+    const headPos = cam.getWorldPosition(new T.Vector3());
+    const right = new T.Vector3(-fwd.z, 0, fwd.x);
+    if (right.lengthSq() < 1e-4) right.set(1, 0, 0).applyQuaternion(this.rig.quaternion); else right.normalize();
+    const inp = { inVR, fwd, right, headPos, moveX: 0, moveY: 0, climb: 0, turnX: 0, boost: false,
+                  start: false, restartHeld: false, toggleMode: false, pausePress: false, menuY: 0, hands: [] };
+
+    if (inVR) {
+      const xr = this.el.renderer.xr, frame = this.el.frame || xr.getFrame(), ref = xr.getReferenceSpace();
+      const rigQ = this.rig.quaternion;
+      const headLocal = this.rig.worldToLocal(headPos.clone());
+      const rightLocal = right.clone().applyQuaternion(rigQ.clone().invert());
+      for (const src of xr.getSession().inputSources) {
+        const gp = src.gamepad, side = src.handedness;
+        if (!gp || (side !== 'left' && side !== 'right')) continue;
+        const sx = gp.axes.length >= 4 ? gp.axes[2] : (gp.axes[0] || 0);
+        const sy = gp.axes.length >= 4 ? gp.axes[3] : (gp.axes[1] || 0);
+        const btn = i => !!(gp.buttons[i] && gp.buttons[i].pressed);
+        if (this.edge(side + 'Face', btn(4))) { inp.boost = true; if (side === 'right') inp.start = true; }
+        if (this.edge(side + 'Stick', btn(3))) inp.pausePress = true; // click either stick: pause menu
+        if (side === 'left') {
+          inp.moveX = sx; inp.moveY = -sy; inp.menuY = -sy;
+          if (this.edge('lY', btn(5))) inp.toggleMode = true;
+        } else {
+          inp.turnX = sx; inp.climb = -sy;
+          inp.restartHeld = btn(5);
+        }
+        const gripPose = frame && ref && src.gripSpace ? frame.getPose(src.gripSpace, ref) : null;
+        const rayPose = frame && ref ? frame.getPose(src.targetRaySpace, ref) : null;
+        if (!gripPose || !rayPose) continue;
+        const gpos = gripPose.transform.position, go = gripPose.transform.orientation, ro = rayPose.transform.orientation;
+        const realLocal = new T.Vector3(gpos.x, gpos.y, gpos.z);
+        const shoulder = headLocal.clone().add(new T.Vector3(0, -0.25, 0)).addScaledVector(rightLocal, side === 'left' ? -0.18 : 0.18);
+        const offset = realLocal.clone().sub(shoulder);
+        const r = offset.length();
+        const reach = r < ARM_START ? r : Math.min(ARM_MAX, r + ARM_GAIN * (r - ARM_START) ** 2);
+        const glove = this.rig.localToWorld(shoulder.clone().addScaledVector(offset.normalize(), reach));
+        const rayQ = new T.Quaternion(ro.x, ro.y, ro.z, ro.w).premultiply(rigQ);
+        const tr = this.track[side];
+        const grip = btn(1), trigger = btn(0);
+        inp.hands.push({
+          side, glove, aimOrigin: glove, shoulder: this.rig.localToWorld(shoulder.clone()),
+          dir: new T.Vector3(0, 0, -1).applyQuaternion(rayQ),
+          quat: new T.Quaternion(go.x, go.y, go.z, go.w).premultiply(rigQ),
+          grip, trigger, triggerPressed: this.edge(side + 'T', trigger), throwPressed: false,
+          gloveVel: this.trackVel(tr.glove, glove, dt), realSpeed: this.trackVel(tr.real, realLocal, dt).length(),
+          haptic: gp.hapticActuators && gp.hapticActuators[0], desktop: false
+        });
+      }
+    } else {
+      const k = this.keys;
+      inp.moveY = (k.KeyW ? 1 : 0) - (k.KeyS ? 1 : 0);
+      inp.moveX = (k.KeyD ? 1 : 0) - (k.KeyA ? 1 : 0);
+      inp.climb = (k.KeyE ? 1 : 0) - (k.KeyQ ? 1 : 0);
+      inp.boost = this.edge('kBoost', !!(k.ShiftLeft || k.ShiftRight));
+      inp.start = this.edge('kEnter', !!(k.Enter || k.NumpadEnter));
+      inp.restartHeld = !!k.KeyR;
+      inp.pausePress = this.edge('kPause', !!(k.KeyP || k.Escape));
+      inp.menuY = (k.ArrowUp ? 1 : 0) - (k.ArrowDown ? 1 : 0);
+      const g = !!k.KeyG;
+      inp.hands.push({
+        side: 'right', glove: headPos.clone().addScaledVector(fwd, 1.0).addScaledVector(UP, -0.3), aimOrigin: headPos.clone(), shoulder: null,
+        dir: fwd.clone(), quat: cam.getWorldQuaternion(new T.Quaternion()),
+        grip: false, trigger: g, triggerPressed: this.edge('kG', g), throwPressed: this.edge('kSpace', !!k.Space),
+        gloveVel: new T.Vector3(), realSpeed: 0, haptic: null, desktop: true
+      });
+    }
+    return inp;
+  },
+
+  tick(t, dtMs) {
+    if (!this.ready) return;
+    const dt = Math.min((dtMs || 16) / 1000, 0.05);
+    this.time += dt;
+    const inp = this.readInput(dt);
+    this.inVR = inp.inVR;
+    this.hands = inp.hands;
+    this.headPos.copy(inp.headPos);
+    this.headFwd.copy(inp.fwd);
+    this.pingT -= dt;
+    this.msgT = Math.max(0, this.msgT - dt);
+
+    // Pause menu (click a stick, PC: P or Esc): resume, restart, version 2 or the home screen. Everything stops while it's open.
+    if (inp.pausePress) { if (this.pauseOpen) this.closePause(); else this.openPause(); }
+    if (this.pauseOpen) { this.updatePause(inp); this.updateHud(dt); return; }
+
+    this.restartHold = inp.restartHeld ? this.restartHold + dt : 0;
+    const restart = this.restartHold > (inp.inVR ? 1 : 0) && this.restartHold - dt <= (inp.inVR ? 1 : 0);
+    if (restart || (inp.start && (this.state === 'ready' || this.state === 'over'))) {
+      this.newMatch();
+      this.startCountdown(3);
+      inp.boost = false;
+    }
+    this.updateState(dt);
+    const live = this.state === 'playing';
+    this.updateMode(inp, dt, live);
+    this.movePlayer(inp, dt, live);
+    this.updateDisc(inp, dt, live);
+    this.updateSnitch(inp, dt, live);
+    this.updateBots(dt, live);
+    this.updateComfort(dt);
+    this.updateHud(dt);
+    this.render(inp, dt);
+  },
+
+  openPause() {
+    if (this.pauseOpen) return;
+    this.pauseOpen = true; this.pauseRow = 0; this.pauseArm = false; this.anchors.left = this.anchors.right = null; this.hudT = 0;
+    beep(500, 80, 0.08);
+  },
+  closePause() { this.pauseOpen = false; this.hudT = 0; beep(700, 80, 0.08); },
+  pauseRows() {
+    return [
+      { id: 'resume', name: 'RESUME' },
+      { id: 'restart', name: 'RESTART MATCH' },
+      { id: 'v2', name: 'PLAY VERSION 2 (DREAM REALMS, MORE MODES)' },
+      { id: 'home', name: 'EXIT TO HOME SCREEN' }
+    ];
+  },
+  updatePause(inp) {
+    const rows = this.pauseRows(), v = inp.menuY;
+    if (Math.abs(v) > 0.7 && this.pauseArm) { this.pauseArm = false; this.pauseRow = (this.pauseRow - Math.sign(v) + rows.length) % rows.length; beep(600, 40, 0.05); this.hudT = 0; }
+    if (Math.abs(v) < 0.3) this.pauseArm = true;
+    if (!inp.start) return;
+    const pick = rows[this.pauseRow].id;
+    if (pick === 'resume') this.closePause();
+    else if (pick === 'restart') { this.closePause(); this.newMatch(); this.startCountdown(3); }
+    else this.leaveTo(pick === 'v2' ? '../' + location.search : '../../');
+    this.hudT = 0;
+  },
+  // Go to another page. Ends VR first so the browser doesn't hang in an empty room.
+  leaveTo(url) {
+    const session = this.el.renderer.xr.getSession && this.el.renderer.xr.getSession();
+    const go = () => location.assign(url);
+    if (session) session.end().then(go, go); else go();
+  },
+
+  updateState(dt) {
+    if (this.state === 'countdown') {
+      const before = Math.ceil(this.countT);
+      this.countT -= dt;
+      if (Math.ceil(this.countT) !== before && this.countT > 0) beep(440, 120, 0.1);
+      if (this.countT <= 0) { this.state = 'playing'; this.flash('GO!'); beep(880, 250, 0.12); }
+      this.hudT = 0;
+    } else if (this.state === 'scored') {
+      this.stateT -= dt;
+      if (this.stateT <= 0) { if (this.timeLeft <= 0) this.endMatch(); else this.startCountdown(2); }
+    } else if (this.state === 'playing') {
+      this.timeLeft -= dt;
+      if (this.timeLeft <= 0) { this.timeLeft = 0; this.endMatch(); }
+    }
+  },
+
+  endMatch() {
+    this.state = 'over';
+    if (this.score.blue > this.best) { this.best = this.score.blue; this.newBest = true; saveBest(this.best); }
+    beep(523, 200, 0.12); beep(392, 400, 0.12, 'sine', 0.2);
+    this.disc.holder = null;
+    this.snitch.active = false;
+    this.hudT = 0;
+  },
+
+  setEasy(on, why) {
+    if (this.easy === on) return;
+    this.easy = on;
+    this.quietT = 0; this.weakThrows = 0; this.bigSwings = 0;
+    this.flash(on ? `EASY REACH ON${why ? ` (${why})` : ''}\nPoint and hold trigger to pull. Trigger again to throw.`
+                  : `FULL MOTION ON${why ? ` (${why})` : ''}\nGrab with grip, swing and let go to throw.`, 3.5);
+    beep(on ? 520 : 780, 160, 0.1);
+  },
+
+  updateMode(inp, dt, live) {
+    if (!inp.inVR) { this.easy = true; return; }
+    if (inp.toggleMode) {
+      this.modeLock = this.easy ? 'full' : 'easy';
+      this.setEasy(this.modeLock === 'easy', 'you chose it');
+      return;
+    }
+    if (this.modeLock || !live) return;
+    let speed = 0;
+    for (const h of inp.hands) speed = Math.max(speed, h.realSpeed);
+    this.activity += (speed - this.activity) * (1 - Math.exp(-dt / 3));
+    this.swingCool = Math.max(0, this.swingCool - dt);
+    if (!this.easy) {
+      this.quietT = this.activity < QUIET_SPEED ? this.quietT + dt : 0;
+      if (this.quietT > QUIET_SECONDS) this.setEasy(true, 'small arm moves');
+      else if (this.weakThrows >= 2) this.setEasy(true, 'soft throws');
+    } else {
+      if (speed > STRONG_SWING && this.swingCool === 0) { this.bigSwings++; this.swingCool = 0.6; }
+      this.bigSwings = Math.max(0, this.bigSwings - dt / 20);
+      if (this.bigSwings >= 3) this.setEasy(false, 'big swings');
+    }
+  },
+
+  useEnergy(n) { this.energy = Math.max(0, this.energy - n); this.energyIdle = 0; },
+
+  movePlayer(inp, dt, live) {
+    if (inp.inVR) {
+      if (Math.abs(inp.turnX) > 0.7 && Math.abs(inp.climb) < 0.5 && this.snapArmed) {
+        this.snapTurn(inp.turnX > 0 ? -30 : 30, inp.headPos.clone()); this.snapArmed = false;
+      }
+      if (Math.abs(inp.turnX) < 0.3) this.snapArmed = true;
+    }
+
+    // Air pockets: a gripping glove inside a pocket locks to that spot and the player moves around it.
+    const d = this.disc, anchored = [];
+    for (const h of inp.hands) {
+      if (h.desktop) continue;
+      const a = this.anchors[h.side];
+      if (a && (!h.grip || !live)) { this.anchors[h.side] = null; continue; }
+      const holdingDisc = d.holder === 'player' && d.hand === h.side;
+      const discClose = d.holder === null && h.glove.distanceTo(d.pos) < SNAP_R;
+      if (!a && live && h.grip && !holdingDisc && !discClose) {
+        const p = this.pockets.find(pk => pk.c.distanceTo(h.glove) < POCKET_R);
+        if (p) { this.anchors[h.side] = { point: h.glove.clone(), pocket: p }; p.glow = 1; pulse(h, 0.5, 40); beep(240, 70, 0.05, 'triangle'); }
+      }
+      if (this.anchors[h.side]) anchored.push({ a: this.anchors[h.side], h });
+    }
+
+    const prevVel = this.vel.clone();
+    this.boosting = false;
+    this.boostCool = Math.max(0, this.boostCool - dt);
+    this.boostT = Math.max(0, this.boostT - dt);
+
+    if (anchored.length) {
+      const delta = new T.Vector3();
+      for (const { a, h } of anchored) delta.add(a.point.clone().sub(h.glove));
+      delta.divideScalar(anchored.length);
+      this.rig.position.add(delta);
+      if (dt > 0) this.holdVel.lerp(delta.divideScalar(dt), 0.5);
+      this.vel.copy(this.holdVel);
+      this.wasAnchored = true;
+    } else {
+      if (this.wasAnchored) {
+        this.wasAnchored = false;
+        this.vel.copy(this.holdVel).multiplyScalar(LAUNCH_GAIN);
+        if (this.vel.length() > LAUNCH_MAX) this.vel.setLength(LAUNCH_MAX);
+        if (this.vel.length() > 4) { beep(200, 220, 0.08, 'sawtooth'); this.impactFlash = 0.3; }
+        this.holdVel.set(0, 0, 0);
+      }
+      const dz = v => Math.abs(v) < 0.15 ? 0 : v;
+      const climb = Math.abs(inp.turnX) > 0.6 ? 0 : dz(inp.climb);
+      const thrust = new T.Vector3().addScaledVector(inp.fwd, dz(inp.moveY)).addScaledVector(inp.right, dz(inp.moveX)).addScaledVector(UP, climb);
+      if (thrust.lengthSq() > 1) thrust.normalize();
+      const boostDir = thrust.lengthSq() > 0.01 ? thrust.clone().normalize() : inp.fwd.clone();
+
+      if (live && inp.boost && this.boostCool === 0 && this.energy >= BOOST_COST) {
+        this.vel.addScaledVector(boostDir, BOOST_BURST);
+        this.useEnergy(BOOST_COST);
+        this.boostT = BOOST_TIME; this.boostCool = BOOST_COOL;
+        this.boostDir = boostDir.clone();
+        this.impactFlash = 0.5;
+        beep(160, 300, 0.1, 'sawtooth');
+      }
+      this.boosting = this.boostT > 0;
+
+      if (!live) {
+        this.vel.multiplyScalar(Math.exp(-3 * dt));
+      } else if (this.easy) {
+        const target = this.boosting ? this.boostDir.clone().multiplyScalar(BOOST_MAX * 0.8) : thrust.clone().multiplyScalar(EASY_SPEED);
+        this.vel.lerp(target, 1 - Math.exp(-EASY_RESPONSE * dt));
+      } else {
+        this.vel.addScaledVector(thrust, THRUST * dt);
+        this.vel.multiplyScalar(Math.exp(-DRAG * dt));
+        const max = this.boosting ? BOOST_MAX : MAX_SPEED, sp = this.vel.length();
+        if (sp > max) this.vel.multiplyScalar((max + (sp - max) * Math.exp(-2 * dt)) / sp);
+      }
+      this.thrustLevel = this.boosting ? 1 : thrust.length() * 0.5;
+      this.rig.position.addScaledVector(this.vel, dt);
+    }
+    this.accelMag = dt > 0 ? prevVel.sub(this.vel).length() / dt : 0;
+
+    const center = this.headEl.getObject3D('camera').getWorldPosition(new T.Vector3());
+    const before = center.clone();
+    const impact = resolveSphere(center, this.vel, PLAYER_R, this.easy ? 0.2 : BOUNCE_PLAYER, this.obstacles);
+    this.rig.position.add(center.sub(before));
+    if (impact > 2) {
+      this.impactFlash = Math.min(1, impact / 10);
+      beep(120, 120, 0.1, 'triangle');
+      for (const h of inp.hands) pulse(h, 0.6, 60);
+    }
+    this.impactFlash = Math.max(0, this.impactFlash - dt * 2);
+
+    this.energyIdle += dt;
+    if (this.energyIdle > REGEN_DELAY) this.energy = Math.min(ENERGY_MAX, this.energy + REGEN * dt);
+  },
+
+  snapTurn(deg, headBefore) {
+    this.rig.rotation.y += deg * DEG;
+    this.rig.updateMatrixWorld(true);
+    const after = this.headEl.getObject3D('camera').getWorldPosition(new T.Vector3());
+    this.rig.position.add(headBefore.sub(after));
+  },
+
+  aimedAt(h, target, range, base) {
+    tmp2.subVectors(target, h.aimOrigin);
+    const dist = tmp2.length();
+    if (dist > range) return false;
+    const along = tmp2.dot(h.dir);
+    if (along <= 0) return false;
+    return Math.sqrt(Math.max(0, dist * dist - along * along)) < base + along * 0.08;
+  },
+
+  // Nudges a throw toward an enemy hoop if it already points close to one.
+  assistDir(origin, dir, maxAngle, team) {
+    let best = maxAngle, pick = null;
+    for (const hp of this.hoops) {
+      if (hp.team === team) continue;
+      tmp.subVectors(hp.c, origin);
+      if (tmp.dot(hp.n) > 0) continue;
+      const ang = dir.angleTo(tmp);
+      if (ang < best) { best = ang; pick = hp; }
+    }
+    return pick ? new T.Vector3().subVectors(pick.c, origin).normalize() : dir.clone().normalize();
+  },
+
+  catchDisc(h, msg) {
+    const d = this.disc;
+    d.holder = 'player'; d.hand = h.side; d.pulledBy = null; d.snapping = false; d.vel.set(0, 0, 0);
+    d.lastThrower = 'player';
+    this.playerGrace = 0.7;
+    if (!h.desktop) this.track[h.side].glove.length = 0;
+    this.flash(msg);
+    pulse(h, 0.7, 50); beep(880, 80, 0.1);
+  },
+
+  releaseDisc(v, h) {
+    const d = this.disc;
+    if (v.length() > DISC_MAX) v.setLength(DISC_MAX);
+    d.vel.copy(v);
+    d.holder = null; d.hand = null; d.pulledBy = null; d.snapping = false; d.noCatch = 0.3;
+    d.lastThrower = 'player';
+    d.spin = 12 + v.length();
+    pulse(h, 1, 70);
+    beep(400 + v.length() * 15, 120, 0.1, 'square');
+  },
+
+  updateDisc(inp, dt, live) {
+    const d = this.disc, hands = inp.hands;
+    const handOf = s => hands.find(h => h.side === s);
+    this.playerStun = Math.max(0, this.playerStun - dt);
+    this.playerGrace = Math.max(0, this.playerGrace - dt);
+    d.noCatch = Math.max(0, d.noCatch - dt);
+    let pullBeam = null;
+
+    if (live) {
+      if (d.holder === 'player') {
+        const h = handOf(d.hand);
+        if (!h) {
+          d.holder = null;
+        } else if (this.easy || h.desktop) {
+          if (h.triggerPressed || h.throwPressed) {
+            this.releaseDisc(this.assistDir(h.aimOrigin, h.dir, EASY_ASSIST, 'blue').multiplyScalar(EASY_THROW).add(this.vel), h);
+          } else { d.pos.copy(h.glove); d.quat.copy(h.quat); }
+        } else if (!h.grip) {
+          const rel = h.gloveVel.clone().sub(this.vel);
+          if (h.realSpeed < 1.0) {
+            this.releaseDisc(this.vel.clone().add(rel), h);
+          } else {
+            const speed = rel.length() * THROW_GAIN;
+            this.releaseDisc(this.assistDir(h.glove, rel, THROW_ASSIST, 'blue').multiplyScalar(speed).add(this.vel), h);
+          }
+          if (h.realSpeed < WEAK_THROW) this.weakThrows++;
+          else if (h.realSpeed > STRONG_SWING) this.weakThrows = 0;
+        } else {
+          d.pos.copy(h.glove); d.quat.copy(h.quat);
+        }
+      } else if (d.holder) {
+        const bot = d.holder;
+        for (const h of hands) {
+          if (d.holder !== bot || this.playerStun > 0) break;
+          const grabbing = h.grip || ((this.easy || h.desktop) && h.trigger);
+          const near = h.glove.distanceTo(bot.pos) < STEAL_R || this.headPos.distanceTo(bot.pos) < STEAL_R;
+          if (!grabbing || !near) continue;
+          if (bot.team === 'blue') { this.catchDisc(h, 'HANDOFF'); }
+          else if (this.fromFrontOrSide(bot, h.glove)) { bot.stun = 1.5; this.catchDisc(h, 'STOLE IT!'); }
+          else if (!this.behindWarnT || this.time > this.behindWarnT) { this.flash('Not from behind! Cut in front.'); this.behindWarnT = this.time + 1.5; }
+        }
+      }
+
+      if (d.holder === null) {
+        for (const h of hands) {
+          if (d.holder !== null || this.playerStun > 0 || d.noCatch > 0) break;
+          const dist = h.glove.distanceTo(d.pos);
+          if (h.grip && dist < GRAB_R + DISC_R) this.catchDisc(h, 'GOT IT');
+          else if (h.grip && dist < SNAP_R && !this.anchors[h.side]) { d.pulledBy = h.side; d.snapping = true; }
+        }
+      }
+      if (d.holder === null) {
+        for (const h of hands) {
+          if (this.easy || h.desktop) {
+            if (h.trigger && !d.pulledBy && this.playerStun === 0 && d.noCatch === 0 && this.aimedAt(h, d.pos, EASY_PULL_RANGE, 1.2)) {
+              d.pulledBy = h.side; d.snapping = false; pulse(h, 0.3, 40); beep(440, 80, 0.06);
+            }
+          } else if (h.triggerPressed && this.energy >= PUSH_COST && this.aimedAt(h, d.pos, PUSH_RANGE, 1.5)) {
+            d.vel.addScaledVector(h.dir, PUSH_POWER);
+            d.pulledBy = null; d.lastThrower = 'player';
+            this.useEnergy(PUSH_COST);
+            pulse(h, 0.8, 60); beep(300, 120, 0.1, 'sawtooth');
+          }
+        }
+        if (d.pulledBy) {
+          const h = handOf(d.pulledBy);
+          const keep = h && (d.snapping ? h.grip : h.trigger);
+          if (!keep) { d.pulledBy = null; d.snapping = false; }
+          else {
+            tmp.subVectors(h.glove, d.pos);
+            const dist = tmp.length();
+            const speed = d.snapping ? SNAP_SPEED : PULL_SPEED;
+            d.vel.lerp(tmp.multiplyScalar(speed / Math.max(dist, 0.01)), 1 - Math.exp(-(d.snapping ? 20 : 8) * dt));
+            pullBeam = h;
+            if (dist < GRAB_R + DISC_R) this.catchDisc(h, 'GOT IT');
+          }
+        }
+      }
+      if (d.holder === null) this.flyDisc(dt);
+    }
+
+    if (d.holder && d.holder !== 'player') {
+      d.pos.copy(d.holder.pos).addScaledVector(d.holder.facing, 1.1);
+      d.quat.identity();
+    }
+    if (pullBeam && d.holder === null) this.setBeam(this.beams.pull, pullBeam.glove, d.pos);
+    else this.beams.pull.visible = false;
+  },
+
+  flyDisc(dt) {
+    const d = this.disc;
+    d.vel.multiplyScalar(Math.exp(-DISC_DRAG * dt));
+    if (d.vel.length() > DISC_MAX) d.vel.setLength(DISC_MAX);
+    const steps = 3, sdt = dt / steps, prev = new T.Vector3();
+    for (let i = 0; i < steps; i++) {
+      prev.copy(d.pos);
+      d.pos.addScaledVector(d.vel, sdt);
+      for (const h of this.hoops) {
+        const d0 = tmp.subVectors(prev, h.c).dot(h.n), d1 = tmp.subVectors(d.pos, h.c).dot(h.n);
+        if (d0 > 0 && d1 <= 0) {
+          tmp.lerpVectors(prev, d.pos, d0 / (d0 - d1));
+          if (tmp.distanceTo(h.c) < h.size - DISC_R * 0.5) return this.goal(h);
+        }
+      }
+      const impact = resolveSphere(d.pos, d.vel, DISC_R, BOUNCE_DISC, this.obstacles);
+      if (impact > 3 && this.pingT <= 0) { beep(700 + Math.min(impact, 30) * 20, 50, 0.05); this.pingT = 0.08; }
+    }
+    d.spin *= Math.exp(-0.3 * dt);
+  },
+
+  goal(h) {
+    const d = this.disc;
+    if (!d.lastThrower) return;
+    const team = OTHER[h.team];
+    h.flash = 1;
+    d.vel.set(0, 0, 0); d.holder = null; d.pulledBy = null;
+    this.score[team] += h.pts;
+    if (team === 'blue') {
+      this.flash(`${d.lastThrower === 'player' ? 'YOU' : 'YOUR ALLY'} SCORED +${h.pts}!`, 2);
+      beep(660, 120, 0.12); beep(880, 120, 0.12, 'sine', 0.1); beep(1320, 260, 0.12, 'sine', 0.2);
+      for (const hand of this.hands) pulse(hand, 1, 150);
+    } else {
+      this.flash(`ORANGE SCORED +${h.pts}`, 2);
+      beep(300, 200, 0.12, 'sawtooth'); beep(200, 300, 0.12, 'sawtooth', 0.2);
+    }
+    this.state = 'scored';
+    this.stateT = 1.5;
+  },
+
+  updateSnitch(inp, dt, live) {
+    const s = this.snitch;
+    if (!live) return;
+    if (!s.active) {
+      s.nextIn -= dt;
+      if (s.nextIn <= 0) {
+        s.active = true;
+        const a = Math.random() * Math.PI * 2, r = Math.random() * 40;
+        s.pos.set(r * Math.cos(a), 10 + Math.random() * 25, r * Math.sin(a));
+        s.vel.set(0, 0, 0); s.retarget = 0;
+        this.flash(`THE SNITCH IS OUT! +${SNITCH_POINTS}`, 2.5);
+        beep(1200, 80, 0.08); beep(1500, 80, 0.08, 'sine', 0.1); beep(1800, 120, 0.08, 'sine', 0.2);
+      }
+      return;
+    }
+    s.retarget -= dt;
+    if (s.retarget <= 0) {
+      const a = Math.random() * Math.PI * 2, r = Math.sqrt(Math.random()) * (ARENA_R - 6);
+      s.target.set(r * Math.cos(a), Y_MIN + 3 + Math.random() * (Y_MAX - Y_MIN - 6), r * Math.sin(a));
+      s.retarget = 0.6 + Math.random() * 0.8;
+    }
+    const desired = tmp.subVectors(s.target, s.pos);
+    const away = tmp2.subVectors(s.pos, this.headPos);
+    if (away.length() < 10) desired.add(away.normalize().multiplyScalar(20));
+    desired.setLength(SNITCH_SPEED);
+    s.vel.lerp(desired, 1 - Math.exp(-3 * dt));
+    s.pos.addScaledVector(s.vel, dt);
+    resolveSphere(s.pos, s.vel, SNITCH_R, 0.9, this.obstacles);
+
+    for (const h of inp.hands) {
+      const got = (this.easy || h.desktop) ? (h.trigger && this.aimedAt(h, s.pos, 6, 0.8)) : (h.grip && h.glove.distanceTo(s.pos) < SNAP_R * 0.7);
+      if (got) return this.catchSnitch('blue', h, true);
+    }
+    for (const b of this.bots) if (b.stun === 0 && b.pos.distanceTo(s.pos) < BOT_CATCH_R + SNITCH_R) return this.catchSnitch(b.team, null, false);
+  },
+
+  catchSnitch(team, h, byPlayer) {
+    const s = this.snitch;
+    s.active = false; s.nextIn = SNITCH_EVERY;
+    this.score[team] += SNITCH_POINTS;
+    if (team === 'blue') {
+      this.flash(`${byPlayer ? 'YOU' : 'YOUR ALLY'} CAUGHT THE SNITCH! +${SNITCH_POINTS}`, 2.5);
+      pulse(h, 1, 250);
+      beep(880, 100, 0.12); beep(1320, 100, 0.12, 'sine', 0.1); beep(1760, 300, 0.12, 'sine', 0.2);
+    } else {
+      this.flash(`ORANGE CAUGHT THE SNITCH +${SNITCH_POINTS}`, 2.5);
+      beep(300, 300, 0.12, 'sawtooth');
+    }
+  },
+
+  updateBots(dt, live) {
+    const d = this.disc, s = this.snitch;
+    if (!live) { for (const b of this.bots) b.vel.multiplyScalar(Math.exp(-3 * dt)); return; }
+    const botSpeed = this.easy ? BOT_SPEED * 0.85 : BOT_SPEED;
+    const free = d.holder === null;
+    const chaser = {};
+    if (free) {
+      for (const team of ['blue', 'orange']) {
+        let best = Infinity, pick = null;
+        for (const b of this.bots) {
+          if (b.team !== team || b.stun > 0 || (s.active && b.seeker)) continue;
+          const dist = b.pos.distanceTo(d.pos);
+          if (dist < best) { best = dist; pick = b; }
+        }
+        const playerDist = this.headPos.distanceTo(d.pos);
+        if (team === 'blue' && pick && playerDist < best && playerDist < 10) pick = null;
+        chaser[team] = pick;
+      }
+    }
+    for (const b of this.bots) {
+      // Re-read every loop: an earlier bot may have just thrown or stolen the disc this frame.
+      const holderTeam = d.holder ? this.teamOf(d.holder) : null;
+      b.stun = Math.max(0, b.stun - dt);
+      b.cool = Math.max(0, b.cool - dt);
+      const attackZ = -OWN_Z[b.team];
+      let goal;
+      if (d.holder === b) {
+        let pick = null, bestScore = Infinity;
+        for (const hp of this.hoops) {
+          if (hp.team === b.team) continue;
+          const score = hp.c.distanceTo(b.pos) - hp.pts * 4;
+          if (score < bestScore) { bestScore = score; pick = hp; }
+        }
+        const front = pick.c.clone().addScaledVector(pick.n, 11);
+        goal = front;
+        const toHoop = tmp.subVectors(pick.c, b.pos);
+        if (b.pos.distanceTo(front) < 3.5 || (toHoop.length() < BOT_SHOOT && toHoop.dot(pick.n) < -0.75 * toHoop.length())) {
+          const aim = pick.c.clone().add(new T.Vector3(Math.random() - 0.5, Math.random() - 0.5, 0).multiplyScalar(pick.size * 1.3));
+          d.vel.copy(aim.sub(d.pos)).setLength(BOT_THROW);
+          d.holder = null; d.lastThrower = b; d.spin = 20; d.noCatch = 0;
+          b.cool = 0.8;
+          beep(260, 120, 0.08, 'square');
+        }
+      } else if (s.active && b.seeker) {
+        goal = s.pos.clone().addScaledVector(s.vel, 0.4);
+      } else if (holderTeam === b.team) {
+        goal = this.posOf(d.holder).clone().add(new T.Vector3(b.lane * 10, 2, Math.sign(attackZ) * 12));
+      } else if (holderTeam) {
+        goal = this.posOf(d.holder).clone().addScaledVector(this.facingOf(d.holder), 2.5);
+      } else if (chaser[b.team] === b) {
+        goal = d.pos.clone().addScaledVector(d.vel, Math.min(1, b.pos.distanceTo(d.pos) / botSpeed));
+      } else {
+        goal = new T.Vector3(Math.max(-14, Math.min(14, d.pos.x)), 16, OWN_Z[b.team] - Math.sign(OWN_Z[b.team]) * 9);
+      }
+
+      const speed = b.stun > 0 ? 0 : botSpeed;
+      tmp.subVectors(goal, b.pos);
+      const dist = tmp.length();
+      const desired = dist > 0.01 ? tmp.multiplyScalar(Math.min(speed, dist * 2) / dist) : tmp.set(0, 0, 0);
+      const steer = desired.sub(b.vel);
+      if (steer.length() > BOT_ACCEL * dt) steer.setLength(BOT_ACCEL * dt);
+      b.vel.add(steer);
+      b.pos.addScaledVector(b.vel, dt);
+      if (resolveSphere(b.pos, b.vel, BOT_R, BOUNCE_BOT, this.obstacles) > 0.5) {
+        b.vel.add(new T.Vector3(Math.random() - 0.5, Math.random() - 0.5, Math.random() - 0.5).multiplyScalar(6));
+      }
+      if (b.vel.lengthSq() > 0.25) b.facing.copy(b.vel).normalize();
+
+      if (d.holder === null && b.cool === 0 && b.stun === 0 && b.pos.distanceTo(d.pos) < BOT_CATCH_R + DISC_R) {
+        d.holder = b; d.pulledBy = null; d.snapping = false; d.vel.set(0, 0, 0); d.lastThrower = b;
+        beep(330, 100, 0.08);
+      } else if (d.holder && d.holder !== b && this.teamOf(d.holder) !== b.team && b.stun === 0) {
+        const carrierPos = this.posOf(d.holder);
+        const graceOk = d.holder !== 'player' || this.playerGrace === 0;
+        if (graceOk && b.pos.distanceTo(carrierPos) < STEAL_R && this.fromFrontOrSide(d.holder, b.pos)) {
+          const victim = d.holder;
+          d.holder = b; d.hand = null; d.lastThrower = b;
+          if (victim === 'player') {
+            this.playerStun = 1;
+            this.flash('STOLEN!');
+            for (const h of this.hands) pulse(h, 1, 200);
+          } else {
+            victim.stun = 1.5;
+          }
+          beep(180, 250, 0.12, 'sawtooth');
+        }
+      }
+    }
+  },
+
+  render(inp, dt) {
+    const d = this.disc;
+    this.discObj.position.copy(d.pos);
+    this.discObj.quaternion.copy(d.quat);
+    d.spinAngle += d.spin * dt;
+    this.discSpinObj.rotation.y = d.spinAngle;
+
+    const s = this.snitch;
+    this.snitchObj.visible = s.active;
+    if (s.active) {
+      this.snitchObj.position.copy(s.pos);
+      const flap = Math.sin(this.time * 40) * 0.6;
+      this.wings[0].rotation.z = flap; this.wings[1].rotation.z = -flap;
+    }
+
+    for (const b of this.bots) {
+      b.obj.position.copy(b.pos);
+      b.obj.lookAt(tmp.copy(b.pos).add(b.facing));
+    }
+
+    for (const hp of this.hoops) {
+      if (!hp.mat) { const m = hp.el.firstElementChild && hp.el.firstElementChild.getObject3D('mesh'); if (m) hp.mat = m.material; }
+      if (hp.flash > 0) { hp.flash = Math.max(0, hp.flash - dt); if (hp.mat) hp.mat.emissiveIntensity = 0.7 + hp.flash * 3; }
+    }
+
+    // Rocks fade to see-through when you're close so they never block your view.
+    for (const r of this.rocks) {
+      if (!r.mat) { const m = r.el.getObject3D('mesh'); if (m) r.mat = m.material; else continue; }
+      const gap = r.c.distanceTo(this.headPos) - r.r;
+      r.mat.opacity = Math.max(0.2, Math.min(1, (gap - 2) / 8));
+    }
+
+    for (const p of this.pockets) {
+      let near = 0;
+      for (const h of inp.hands) if (!h.desktop) near = Math.max(near, 1 - Math.min(1, (h.glove.distanceTo(p.c) - POCKET_R) / 2.5));
+      const held = this.anchors.left && this.anchors.left.pocket === p || this.anchors.right && this.anchors.right.pocket === p;
+      p.glow += ((held ? 1 : near) - p.glow) * (1 - Math.exp(-8 * dt));
+      const sc = 1 + Math.sin(this.time * 2 + p.phase) * 0.08 + p.glow * 0.25;
+      p.el.object3D.scale.set(sc, sc, sc);
+      const shell = p.el.firstElementChild && p.el.firstElementChild.getObject3D('mesh');
+      if (shell) shell.material.opacity = 0.1 + p.glow * 0.35;
+    }
+
+    for (const side of ['left', 'right']) {
+      const h = inp.hands.find(x => x.side === side && !x.desktop);
+      const gloveObj = this.gloveEls[side].object3D;
+      const arm = side === 'left' ? this.beams.armL : this.beams.armR;
+      const aim = side === 'left' ? this.beams.aimL : this.beams.aimR;
+      gloveObj.visible = !!h;
+      if (!h) { arm.visible = false; aim.visible = false; continue; }
+      gloveObj.position.copy(this.rig.worldToLocal(h.glove.clone()));
+      this.setBeam(arm, h.shoulder, h.glove);
+      if (this.easy) this.setBeam(aim, h.glove, h.glove.clone().addScaledVector(h.dir, 15)); else aim.visible = false;
+    }
+
+    const f = this.energy / ENERGY_MAX;
+    this.energyBar.scale.x = Math.max(0.001, f);
+    this.energyBar.position.x = -0.25 + 0.25 * f;
+    const glowMesh = this.thrusterGlow.getObject3D('mesh');
+    if (glowMesh) glowMesh.material.opacity = 0.15 + (this.thrustLevel || 0) * 0.6;
+  },
+
+  updateComfort(dt) {
+    if (!this.vigMat) {
+      const v = document.getElementById('vignette').getObject3D('mesh');
+      if (!v) return;
+      v.material.map = vignetteTexture();
+      v.material.needsUpdate = true;
+      v.renderOrder = 999;
+      this.vigMat = v.material;
+    }
+    const speed = this.vel.length();
+    const target = Math.min(0.85, this.accelMag / 30 + Math.max(0, speed - 14) / 14 + this.impactFlash * 0.8);
+    this.vig += (target - this.vig) * (1 - Math.exp(-8 * dt));
+    this.vigMat.opacity = this.vig;
+  },
+
+  modeLabel() {
+    if (!this.inVR) return 'Easy reach (PC)';
+    if (this.modeLock) return this.easy ? 'Easy reach (locked, Y to switch)' : 'Full motion (locked, Y to switch)';
+    return this.easy ? 'Easy reach (auto)' : 'Full motion (auto)';
+  },
+
+  updateHud(dt) {
+    this.hudT -= dt;
+    if (this.hudT > 0) return;
+    this.hudT = 0.15;
+    const m = Math.floor(this.timeLeft / 60), s = String(Math.floor(this.timeLeft % 60)).padStart(2, '0');
+    const vr = this.inVR;
+    if (this.pauseOpen) {
+      const rows = this.pauseRows();
+      const txt = `PAUSED     BLUE ${this.score.blue} : ${this.score.orange} ORANGE\n` + rows.map((r, i) => `${i === this.pauseRow ? '> ' : ''}${r.name}${i === this.pauseRow ? ' <' : ''}`).join('\n') +
+                  '\n' + (vr ? 'Left stick up/down picks, A chooses. Click a stick: resume.' : 'Arrow keys pick, Enter chooses. P or Esc: resume.');
+      if (txt !== this.lastHud) { this.lastHud = txt; this.hudText.setAttribute('value', txt); this.scoreEl.textContent = txt; }
+      return;
+    }
+    let line3 = '';
+    if (this.state === 'ready') {
+      line3 = vr ? 'Press A to start. Click a stick: menu (version 2, home screen).\nLeft stick flies where you look. Right stick: up, down, turn.\nGrip grabs the disc or an air pocket. Swing and let go to throw.'
+                 : 'Press Enter to start. P: menu (version 2, home screen).\nWASD flies where you look, E/Q up/down, Shift boosts.\nHold G to pull the disc, Space throws where you look.';
+    } else if (this.state === 'countdown') {
+      line3 = String(Math.max(1, Math.ceil(this.countT)));
+    } else if (this.state === 'over') {
+      const b = this.score.blue, o = this.score.orange;
+      const result = b > o ? 'Blue wins!' : b < o ? 'Orange wins.' : 'Draw.';
+      line3 = `${result}${this.newBest ? ' New best!' : ''}\n` + (vr ? 'Press A to play again.' : 'Press Enter to play again.');
+    } else if (this.msgT > 0) {
+      line3 = this.msg;
+    } else if (vr && this.restartHold > 0.15) {
+      line3 = 'Keep holding B to restart...';
+    }
+    const line2 = this.modeLabel() + (this.snitch.active ? '     SNITCH IS OUT' : '');
+    const txt = `BLUE (you) ${this.score.blue} : ${this.score.orange} ORANGE     ${m}:${s}     BEST ${this.best}\n${line2}` + (line3 ? '\n' + line3 : '');
+    if (txt !== this.lastHud) {
+      this.lastHud = txt;
+      this.hudText.setAttribute('value', txt);
+      this.scoreEl.textContent = txt;
+    }
+  }
+});
+</script>
+</head>
+<body>
+<div id="help">
+  <h1>Surge League <small>version 1 (classic)</small></h1>
+  <div>Two against two in a round sky arena: you and your ally (blue) against two orange bots. Throw the disc through the orange hoops at the far end and guard your blue ones. Side hoops are worth 2, the tall middle one 1. Steals only work from the front or side. Catch the golden snitch for 3. Matches last 4 minutes.</div>
+  <div class="cols">
+    <div><b>Quest: flying</b><br>Left stick: fly where you look<br>Right stick up/down: rise, sink<br>Right stick sideways: snap turn<br>A or X: boost<br>Grip an air pocket: hold on, pull, let go to fling<br>A: start, hold B: restart, Y: mode<br>Click a stick: pause menu (resume, restart, version 2, home screen)</div>
+    <div><b>Quest: your long arms</b><br>Reach out: arms stretch far<br>Grip near the disc: it snaps to your hand<br>Swing and let go: throw<br>Trigger: push the disc from afar<br><b>Easy reach</b> (auto if you move little): point, hold trigger to pull, trigger again to throw</div>
+  </div>
+  <div class="cols">
+    <div><b>PC</b><br>WASD: fly where you look, E / Q: up / down, drag mouse: look, Shift: boost<br>Hold G while looking at the disc: pull it in. Space: throw where you look<br>Enter: start, R: restart, P or Esc: pause menu</div>
+  </div>
+  <div style="margin-top:8px"><a href="../" style="color:#7ff">Play version 2 (dream realms)</a> &nbsp;|&nbsp; <a href="../../" style="color:#7ff">Quest Games home</a></div>
+  <div id="score"></div>
+  <button id="hideHelp" onclick="document.getElementById('help').style.display='none'">Hide</button>
+</div>
+<div id="cross"></div>
+
+<a-scene surge-game
+         renderer="antialias: true; colorManagement: true; foveationLevel: 1"
+         background="color: #9fd3ff"
+         fog="type: exponential; color: #9fd3ff; density: 0.004"
+         vr-mode-ui="enabled: true"
+         loading-screen="dotsColor: #66ffff; backgroundColor: #0b1a2b">
+  <a-sky color="#9fd3ff"></a-sky>
+  <a-entity light="type: hemisphere; color: #ffffff; groundColor: #4a6a4a; intensity: 0.9"></a-entity>
+  <a-entity light="type: directional; color: #fff4dd; intensity: 0.8" position="30 60 20"></a-entity>
+
+  <a-circle radius="500" rotation="-90 0 0" color="#5b8f55"></a-circle>
+  <a-cylinder radius="60" height="0.6" position="0 0.3 0" theta-start="90" theta-length="180" segments-radial="64" color="#7a7650"></a-cylinder>
+  <a-cylinder radius="60" height="0.6" position="0 0.3 0" theta-start="270" theta-length="180" segments-radial="64" color="#4a7a72"></a-cylinder>
+  <a-box width="120" height="0.1" depth="0.8" position="0 0.66 0" material="color: #e8efe2; roughness: 1"></a-box>
+  <a-torus radius="8" radius-tubular="0.2" rotation="90 0 0" position="0 0.75 0" segments-tubular="64" material="color: #e8efe2; roughness: 1"></a-torus>
+  <a-torus radius="60" radius-tubular="0.35" rotation="90 0 0" position="0 0.8 0" segments-tubular="120" material="color: #e8efe2; roughness: 1"></a-torus>
+  <a-cylinder radius="60" height="38" position="0 21 0" open-ended="true" segments-radial="96"
+              material="shader: flat; color: #bff; opacity: 0.05; transparent: true; side: double; depthWrite: false"></a-cylinder>
+  <a-torus radius="60" radius-tubular="0.2" rotation="90 0 0" position="0 40 0" segments-tubular="120" material="shader: flat; color: #bff; opacity: 0.35; transparent: true"></a-torus>
+
+  <a-entity id="disc" position="0 16 0">
+    <a-entity id="discSpin">
+      <a-cylinder radius="0.32" height="0.05" material="color: #e9fbff; emissive: #66ffff; emissiveIntensity: 0.5"></a-cylinder>
+      <a-torus radius="0.32" radius-tubular="0.03" rotation="90 0 0" material="color: #66ffff; emissive: #33ffff; emissiveIntensity: 1"></a-torus>
+      <a-box width="0.36" height="0.06" depth="0.06" material="color: #10324a"></a-box>
+    </a-entity>
+    <a-sphere radius="0.7" segments-width="16" segments-height="12" material="shader: flat; color: #9ff; opacity: 0.18; transparent: true; depthWrite: false"></a-sphere>
+  </a-entity>
+
+  <a-entity id="snitch" visible="false">
+    <a-sphere radius="0.15" segments-width="16" segments-height="12" material="color: #ffd23d; emissive: #ffb000; emissiveIntensity: 0.8; metalness: 0.7; roughness: 0.3"></a-sphere>
+    <a-plane id="wingL" width="0.45" height="0.16" position="-0.27 0.04 0" material="shader: flat; color: #ffffff; opacity: 0.85; transparent: true; side: double"></a-plane>
+    <a-plane id="wingR" width="0.45" height="0.16" position="0.27 0.04 0" material="shader: flat; color: #ffffff; opacity: 0.85; transparent: true; side: double"></a-plane>
+    <a-sphere radius="0.5" segments-width="12" segments-height="8" material="shader: flat; color: #ffd23d; opacity: 0.2; transparent: true; depthWrite: false"></a-sphere>
+  </a-entity>
+
+  <a-entity id="rig" position="0 12.7 40">
+    <a-entity id="head" camera="near: 0.05; far: 1500" look-controls="pointerLockEnabled: false" position="0 1.3 0">
+      <a-plane id="vignette" width="0.6" height="0.6" position="0 0 -0.12"
+               material="shader: flat; transparent: true; opacity: 0; depthTest: false; depthWrite: false"></a-plane>
+    </a-entity>
+    <a-entity id="leftHand" oculus-touch-controls="hand: left"></a-entity>
+    <a-entity id="rightHand" oculus-touch-controls="hand: right"></a-entity>
+    <a-sphere id="gloveL" radius="0.13" visible="false" segments-width="14" segments-height="10" material="color: #66ffff; emissive: #33ffff; emissiveIntensity: 0.7"></a-sphere>
+    <a-sphere id="gloveR" radius="0.13" visible="false" segments-width="14" segments-height="10" material="color: #66ffff; emissive: #33ffff; emissiveIntensity: 0.7"></a-sphere>
+
+    <a-entity id="ufo" position="0 0.35 0">
+      <a-cylinder radius="1.1" height="0.12" segments-radial="28" material="color: #8aa4c4; metalness: 0.6; roughness: 0.3"></a-cylinder>
+      <a-torus radius="1.1" radius-tubular="0.05" rotation="90 0 0" segments-tubular="48" material="color: #3d8bff; emissive: #3d8bff; emissiveIntensity: 0.8"></a-torus>
+      <a-cone radius-bottom="0.9" radius-top="0.3" height="0.3" position="0 -0.2 0" rotation="180 0 0" segments-radial="20" material="color: #5d7391; metalness: 0.5; roughness: 0.4"></a-cone>
+      <a-circle id="thrusterGlow" radius="0.5" position="0 -0.36 0" rotation="90 0 0" material="shader: flat; color: #66ffff; opacity: 0.15; transparent: true"></a-circle>
+      <a-sphere radius="0.05" position="1.05 0.06 0" material="color: #fff; emissive: #ffd23d; emissiveIntensity: 1"></a-sphere>
+      <a-sphere radius="0.05" position="-1.05 0.06 0" material="color: #fff; emissive: #ffd23d; emissiveIntensity: 1"></a-sphere>
+      <a-sphere radius="0.05" position="0 0.06 1.05" material="color: #fff; emissive: #ffd23d; emissiveIntensity: 1"></a-sphere>
+      <a-sphere radius="0.05" position="0 0.06 -1.05" material="color: #fff; emissive: #ffd23d; emissiveIntensity: 1"></a-sphere>
+    </a-entity>
+
+    <a-entity id="hud" position="0 0.62 -0.85" rotation="-35 0 0">
+      <a-plane width="0.84" height="0.34" material="color: #08121f; opacity: 0.8; transparent: true; shader: flat"></a-plane>
+      <a-text id="hudText" value="" align="center" width="0.8" wrap-count="54" position="0 0.03 0.002" color="#e8f3ff"></a-text>
+      <a-text value="BOOST" align="right" width="0.4" position="-0.27 -0.14 0.002" color="#9bb3cc"></a-text>
+      <a-plane width="0.5" height="0.025" position="0 -0.14 0.001" material="shader: flat; color: #1e3a5c"></a-plane>
+      <a-plane id="energyBar" width="0.5" height="0.025" position="0 -0.14 0.002" material="shader: flat; color: #66ffff"></a-plane>
+    </a-entity>
+  </a-entity>
+</a-scene>
+</body>
+</html>

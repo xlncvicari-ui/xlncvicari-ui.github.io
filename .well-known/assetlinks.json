@@ -1,0 +1,14 @@
+[
+  {
+    "relation": [
+      "delegate_permission/common.handle_all_urls"
+    ],
+    "target": {
+      "namespace": "android_app",
+      "package_name": "com.funprojects.surgeleague",
+      "sha256_cert_fingerprints": [
+        "BF:67:3D:E5:4E:B1:EB:A3:67:8C:88:0F:71:36:0B:4E:5D:C3:2A:EF:0F:AC:F7:A5:61:F8:AC:E8:61:A8:DE:EA"
+      ]
+    }
+  }
+]
