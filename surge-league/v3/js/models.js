@@ -317,16 +317,19 @@ function buildRide(id, col) {
     parts.push({ geo: roundedBox(0.7, 0.2, 0.08, 0.03, 2), pos: [0, 0.48, 0.47], rot: [-30, 0, 0], color: '#3a3f47', s: S.metal },
                { geo: G.box(0.56, 0.11, 0.01), pos: [0, 0.485, 0.515], rot: [-30, 0, 0], color: col, s: S.neon });
   } else if (id === 'castle') {
-    const rnd = seeded(13);
-    parts.push({ geo: limbGeo([0, 0, 1.0], [0, 0, -1.0], 0.026, 0.036, 10), color: '#6e4826', s: S.wood },
-               { geo: new T.SphereGeometry(0.034, 10, 8), pos: [0, 0, 1.0], color: '#c9a86a', s: S.metal },
-               { geo: new T.OctahedronGeometry(0.05, 0), pos: [0, 0.0, 1.07], scale: [1, 1, 1.4], color: col, s: S.light });
-    for (const z of [-0.92, -0.98, -1.04]) parts.push({ geo: new T.TorusGeometry(0.05, 0.009, 6, 18), pos: [0, 0, z], color: '#b8913f', s: S.metal });
-    for (let i = 0; i < 70; i++) {
-      const a = rnd() * Math.PI * 2, rr = Math.sqrt(rnd()) * 0.05, spread = 0.1 + rnd() * 0.16, len = 0.55 + rnd() * 0.25;
-      const start = [Math.cos(a) * rr, Math.sin(a) * rr, -1.0], end = [Math.cos(a) * (rr + spread), Math.sin(a) * (rr + spread) - 0.03, -1.0 - len];
-      parts.push({ geo: limbGeo(start, end, 0.009, 0.005, 3), color: ['#d9b45a', '#c49a45', '#e6c773', '#b08638'][i % 4], s: S.straw });
-    }
+    // Sky glider: a slim dark-wood deck with a pointed nose, a brass inlay, swept brass wings with team-color tip lights,
+    // a glowing keel underneath and a team-color light on the nose.
+    const s = new T.Shape(), L = 0.8, W = 0.2;
+    s.moveTo(0, -L - 0.14); s.quadraticCurveTo(W, -L + 0.15, W, 0); s.lineTo(W * 0.8, L); s.lineTo(-W * 0.8, L); s.lineTo(-W, 0); s.quadraticCurveTo(-W, -L + 0.15, 0, -L - 0.14);
+    const deck = new T.ExtrudeGeometry(s, { depth: 0.04, bevelEnabled: true, bevelThickness: 0.012, bevelSize: 0.012, bevelSegments: 2, curveSegments: 10 });
+    deck.rotateX(-Math.PI / 2); deck.translate(0, -0.052, 0);
+    parts.push({ geo: deck, color: '#4a2f1c', s: S.wood },
+               { geo: G.box(0.022, 0.004, 1.3), pos: [0, 0.002, -0.05], color: '#c9a86a', s: S.metal },
+               { geo: roundedBox(0.035, 0.08, 1.2, 0.012, 1), pos: [0, -0.1, -0.02], color: '#bfe0ff', s: S.light },
+               { geo: new T.OctahedronGeometry(0.05, 0), pos: [0, -0.02, 0.96], scale: [1, 0.6, 1.5], color: col, s: S.light });
+    for (const sx of [-1, 1]) parts.push(
+      { geo: roundedBox(0.7, 0.024, 0.26, 0.01, 1), pos: [sx * 0.5, -0.04, -0.15], rot: [0, sx * 28, sx * 6], color: '#b8913f', s: S.metal },
+      { geo: new T.SphereGeometry(0.025, 8, 6), pos: [sx * 0.81, -0.005, -0.31], color: col, s: S.light });
   } else if (id === 'gym') {
     const s = new T.Shape(), L = 0.72, W = 0.25;
     s.moveTo(-W + 0.05, -L + 0.2); s.quadraticCurveTo(0, -L - 0.04, W - 0.05, -L + 0.2); s.lineTo(W, L - 0.25); s.quadraticCurveTo(0, L + 0.06, -W, L - 0.25); s.lineTo(-W + 0.05, -L + 0.2);
@@ -352,7 +355,7 @@ function buildRide(id, col) {
 
 // Swaps the player's simple rides (a-entity shapes in index.html) for the built models, keeping the thruster glow.
 // The player faces -z, so the models turn around; y = where the old shapes' top surface was.
-const PLAYER_RIDE_PLACE = { saucer: [0.06, 1.15], foundry: [0.325, 1.1], castle: [0.38, 1.1], gym: [0.095, 1.05], cloud: [0.42, 1.2] };
+const PLAYER_RIDE_PLACE = { saucer: [0.06, 1.15], foundry: [0.325, 1.1], castle: [0.09, 1.1], gym: [0.095, 1.05], cloud: [0.42, 1.2] };
 function upgradePlayerRides(game, col) {
   for (const id in PLAYER_RIDE_PLACE) {
     const ent = game.$('ride-' + id); if (!ent) continue;

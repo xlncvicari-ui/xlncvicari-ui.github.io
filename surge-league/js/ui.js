@@ -245,7 +245,7 @@ function paintHowTo(g, W, H, panel, m) {
   const y0 = 650;
   g.fillStyle = 'rgba(255,255,255,0.05)'; rrect(g, 44, y0, W - 88, 210, 24); g.fill();
   const items = [['THROW', 'through an orange hoop', 'small hoop 2 · big hoop 1'], ['DUNK', 'fly through a hoop holding the disc', '+2 extra'],
-                 ['TRICK SHOT', 'bank it in off a prism', 'double points'], ['SNITCH', 'catch the golden snitch', '+3']];
+                 ['TRICK SHOT', 'bank it in off a prism', 'double points'], ['COMET', 'catch the comet', '+3']];
   items.forEach(([t, a, b], i) => {
     const x = 44 + (W - 88) / 4 * (i + 0.5);
     g.textAlign = 'center'; g.fillStyle = '#ffd166'; g.font = uiFont(34, 900); g.fillText(t, x, y0 + 50);

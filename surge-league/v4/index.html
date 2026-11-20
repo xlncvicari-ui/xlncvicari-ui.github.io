@@ -1,0 +1,129 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Surge League: Station Rugby</title>
+<script src="/surge-league/lib/aframe.min.js"></script><script src="/surge-league/lib/offline.js"></script>
+<script src="js/data.js"></script>
+<script src="js/kit.js"></script>
+<script src="js/ui.js"></script>
+<script src="js/gfx.js"></script>
+<script src="js/models.js"></script>
+<script src="js/station.js"></script>
+<script src="js/ui4.js"></script>
+<script src="js/profile.js"></script>
+<script src="js/teamai.js"></script>
+<script src="js/game.js"></script>
+<style>
+  html, body { margin: 0; height: 100%; background: #050a14; font-family: system-ui, sans-serif; }
+  #panel { position: fixed; left: 12px; top: 12px; z-index: 10; width: min(460px, calc(100vw - 24px)); max-height: calc(100vh - 24px); overflow: auto;
+           background: rgba(8,16,30,.9); color: #e8f3ff; padding: 14px 16px; border-radius: 10px; font-size: 14px; line-height: 1.5; box-sizing: border-box; }
+  #panel h1 { font-size: 20px; margin: 0 0 2px; }
+  #panel .sub { color: #66ffff; font-weight: 700; font-size: 13px; letter-spacing: .04em; margin-bottom: 8px; }
+  #panel h2 { font-size: 14px; margin: 12px 0 4px; color: #ffd166; letter-spacing: .04em; }
+  #panel p { margin: 4px 0; }
+  #panel b { color: #7ff; }
+  #panel table { border-collapse: collapse; width: 100%; font-size: 13px; }
+  #panel td { padding: 3px 6px 3px 0; vertical-align: top; }
+  #panel td:first-child { color: #ffd166; font-weight: 800; white-space: nowrap; width: 44px; }
+  #panel label { display: block; margin-top: 8px; color: #9bb3cc; font-size: 12px; }
+  #panel input { width: 100%; box-sizing: border-box; margin-top: 2px; padding: 6px 8px; border-radius: 6px; border: 1px solid #2b4a6e; background: #0e2238; color: #e8f3ff; font-size: 14px; }
+  #panel button { margin-top: 8px; background: #1e3a5c; color: #e8f3ff; border: 0; border-radius: 6px; padding: 5px 10px; cursor: pointer; }
+  #status { white-space: pre-wrap; font-size: 12px; color: #ffd166; margin-top: 10px; }
+  details summary { cursor: pointer; margin-top: 10px; color: #7ff; }
+  #tapToPlay { position: fixed; inset: 0; z-index: 20; display: none; flex-direction: column; align-items: center; justify-content: center; gap: 18px;
+               background: radial-gradient(circle at 50% 40%, #1d3d61, #050a14 70%); color: #9bb3cc; font-size: 22px; }
+  #tapToPlay button { font: 800 44px system-ui, sans-serif; padding: 28px 56px; border: 0; border-radius: 22px; background: #66ffff; color: #04121f; cursor: pointer; }
+</style>
+</head>
+<body>
+<div id="panel">
+  <h1>Surge League</h1>
+  <div class="sub">STATION RUGBY · 8 VS 8 · ZERO GRAVITY</div>
+  <p>A team sport for VR. Sixteen riders fly through the corridors of Meridian Station, a giant space station. You fly for <b>BLUE</b> with 7 teammates against 8 on <b>ORANGE</b>. Carry, pass and throw the glowing <b>CORE</b> into the other team's goals.</p>
+  <p>Press <b>VR</b> (bottom right), then <b>TRAINING</b> for a 2-minute walk through every control, or <b>HOW TO PLAY</b> for the rules and a map.</p>
+
+  <h2>SCORING</h2>
+  <table>
+    <tr><td>1</td><td>A <b>lobby hole</b>: three round holes in the wall at the other team's end of the lobby. The short, crowded way.</td></tr>
+    <tr><td>3</td><td>The <b>deep goal</b>, behind their lobby: fly down a side corridor, round the loop (a wall makes you go the long way) and along the back corridor.</td></tr>
+    <tr><td>+1</td><td><b>Bank shot</b>: bounce it off a wall on the way in.</td></tr>
+    <tr><td>+1</td><td><b>Long shot</b>: score from 28 m or further, any time.</td></tr>
+    <tr><td>2</td><td><b>Penalty</b>: a free shot after the other team commits a foul.</td></tr>
+  </table>
+
+  <h2>CONTACT</h2>
+  <p>Touch anyone and you bounce apart. Grab the CORE straight out of a rival's hands, or fly into the carrier to <b>CLASH</b>: you both stop dead and wrestle for it (tap the trigger fast; teammates nearby help, and the carrier can pass out of it). Crash hard into a rival who doesn't have the CORE and that's a <b>late hit</b>: their team gets a penalty.</p>
+  <p>Hover in the <b>SIGHT RING</b> in the exact middle of the lobby and you see every rider through the walls, so nobody can camp round a corner.</p>
+
+  <details>
+    <summary>Controls</summary>
+    <p><b>Quest</b>: point your hands where you want to fly and push the left stick forward. Push either stick down to boost. Flick the right stick sideways to snap turn, up and down to rise and sink. A or X turns you around. Point at the CORE and hold the trigger to pull it in; point at a goal and press the trigger to throw; point at a teammate and press the trigger to pass. Grip snatches it out of a rival's hands. Y pauses. You always stay upright.</p>
+    <p><b>PC</b>: WASD fly, E / Q up and down, drag to look, Shift boost, L turn around, hold G to pull the CORE, Space throws, F passes, G or Space tapped fast wins a clash, P or Esc pauses, Tab shows the score.</p>
+  </details>
+  <label>Your player name (saved on this device)<input id="name" maxlength="16" autocomplete="off"></label>
+  <button id="saveSettings">Save</button>
+  <div style="margin-top:8px"><a href="../v3/" style="color:#7ff">Version 3 (open-air realms)</a> &nbsp;|&nbsp; <a href="../" style="color:#7ff">Version 2</a> &nbsp;|&nbsp; <a href="../../" style="color:#7ff">Quest Games home</a></div>
+  <div id="status"></div>
+  <button onclick="document.getElementById('panel').style.display='none'">Hide</button>
+</div>
+<div id="tapToPlay"><button>PLAY SURGE LEAGUE</button><p>Press the Meta button to quit.</p></div>
+
+<a-scene surge-game renderer="antialias: true; colorManagement: true; toneMapping: ACESFilmic; exposure: 1.1; foveationLevel: 1; sortTransparentObjects: true" vr-mode-ui="enabled: true"
+         loading-screen="dotsColor: #66ffff; backgroundColor: #050a14">
+  <a-entity id="hemi" light="type: hemisphere; color: #e4ecff; groundColor: #46505f; intensity: 1.2"></a-entity>
+  <a-entity id="sun" light="type: directional; color: #fff1dc; intensity: 1.1" position="700 420 -600"></a-entity>
+
+  <a-entity id="rig" position="0 7.6 30">
+    <a-entity id="head" camera="near: 0.05; far: 3000" look-controls="pointerLockEnabled: false" position="0 1.3 0">
+      <a-plane id="vignette" width="0.6" height="0.6" position="0 0 -0.12" material="shader: flat; transparent: true; opacity: 0; depthTest: false; depthWrite: false"></a-plane>
+      <a-plane id="fade" width="0.8" height="0.8" position="0 0 -0.11" material="shader: flat; color: #000; transparent: true; opacity: 0; depthTest: false; depthWrite: false"></a-plane>
+    </a-entity>
+    <a-entity id="leftHand" oculus-touch-controls="hand: left"></a-entity>
+    <a-entity id="rightHand" oculus-touch-controls="hand: right"></a-entity>
+    <a-sphere id="gloveL" radius="0.13" visible="false" segments-width="14" segments-height="10" material="color: #66ffff; emissive: #33ffff; emissiveIntensity: 0.7"></a-sphere>
+    <a-sphere id="gloveR" radius="0.13" visible="false" segments-width="14" segments-height="10" material="color: #66ffff; emissive: #33ffff; emissiveIntensity: 0.7"></a-sphere>
+    <a-entity id="cockpit">
+      <!-- your jet board (built in js/models.js) -->
+      <a-entity id="ride"></a-entity>
+      <!-- the scoreboard and menus are drawn by js/ui.js and js/ui4.js on these anchors -->
+      <a-entity id="hud" position="0 0.62 -0.85" rotation="-35 0 0"></a-entity>
+      <a-entity id="menu" position="0 1.22 -1.55"></a-entity>
+    </a-entity>
+  </a-entity>
+</a-scene>
+
+<script>
+  const game = () => document.querySelector('a-scene').components['surge-game'];
+  const nameBox = document.getElementById('name');
+  const fill = () => { const g = game(); if (!g || !g.ready) return setTimeout(fill, 300); nameBox.value = Profiles.current(g.save).name; };
+  fill();
+  document.getElementById('saveSettings').onclick = () => {
+    const g = game(), p = Profiles.current(g.save);
+    p.name = (nameBox.value.trim() || p.name).toUpperCase().slice(0, 16);
+    writeSave(g.save); g.menuKey = ''; nameBox.value = p.name;
+  };
+  if ('serviceWorker' in navigator) navigator.serviceWorker.register('../sw.js', { scope: '../' }).catch(() => {});
+  // Opened as the installed Surge League app (?app=1): skip the 2D page and go straight into VR.
+  if (new URLSearchParams(location.search).has('app')) {
+    window.SURGE_APP = { home: './?app=1' };
+    document.getElementById('panel').style.display = 'none';
+    const tap = document.getElementById('tapToPlay'), scene = document.querySelector('a-scene');
+    const enter = () => { if (!scene.is('vr-mode')) Promise.resolve(scene.enterVR()).catch(() => { tap.style.display = 'flex'; }); };
+    tap.addEventListener('click', enter);
+    scene.addEventListener('enter-vr', () => { tap.style.display = 'none'; });
+    let leftOnPurpose = false;
+    scene.addEventListener('exit-vr', () => { tap.style.display = 'flex'; leftOnPurpose = true; });
+    tap.style.display = 'flex';
+    const auto = () => {
+      if (!navigator.xr || leftOnPurpose || document.hidden || scene.is('vr-mode') || !scene.hasLoaded) return;
+      navigator.xr.isSessionSupported('immersive-vr').then(ok => { if (ok) enter(); }, () => {});
+    };
+    if (scene.hasLoaded) auto(); else scene.addEventListener('loaded', auto);
+    document.addEventListener('visibilitychange', auto);
+    window.addEventListener('focus', auto);
+  }
+</script>
+</body>
+</html>

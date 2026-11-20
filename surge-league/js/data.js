@@ -7,7 +7,7 @@ const VERSION_LINK = { url: 'v3/', label: 'VERSION 3', hint: 'Try version 3: new
 
 // Every arena is the same frisbee-shaped volume so skills carry over: blue half at +z, orange half at -z.
 const ARENA_R = 60, Y_MIN = 2, Y_MAX = 40, GOAL_Z = 52;
-const PLAYER_R = 0.6, DISC_R = 0.32, BOT_R = 0.8, SNITCH_R = 0.2;
+const PLAYER_R = 0.6, DISC_R = 0.32, BOT_R = 0.8, COMET_R = 0.2;
 
 const THRUST = 12, MAX_SPEED = 12, DRAG = 0.35;
 const BOOST_BURST = 12, BOOST_MAX = 24, BOOST_TIME = 0.6, BOOST_COOL = 0.8, BOOST_COST = 20;
@@ -36,7 +36,7 @@ const CURVE_K = 1.5, CURVE_MAX = 14, CURVE_DECAY = 1.2;
 const CURRENT_Y = 16, CURRENT_R = 4.5, CURRENT_LEN = 40, CURRENT_ACCEL = 16, CURRENT_SPEED = 20;
 const BOT_SPEED = 11, BOT_ACCEL = 16, BOT_THROW = 26, BOT_SHOOT = 16, BOT_CATCH_R = 1.2;
 const STEAL_R = 1.6, BEHIND_DOT = -0.25, GRACE = 0.7;
-const SNITCH_SPEED = 16, SNITCH_POINTS = 3;
+const COMET_SPEED = 16, COMET_POINTS = 3;
 const TRICK_WINDOW = 2.5, CORE_R = 6, CORE_TICK = 1;
 const QUIET_SPEED = 0.12, QUIET_SECONDS = 15, WEAK_THROW = 1.8, STRONG_SWING = 2.5;
 
@@ -66,13 +66,13 @@ const REALMS = [
     decor: 'foundry', particles: { kind: 'embers', color: '#ffae4a', count: 220, size: 0.22 },
     rock: { geo: 'ico', color: '#5f6670', emissive: '#ff6a00', glow: 0.3, metal: 0.85, rough: 0.35 },
     hoop: { tube: 0.16, seg: 6 }, disc: 'dv-puck', trail: '#ff8a1f', wind: '#ffcf8a', arm: '#a9b2bd', ink: '#ffffff' },
-  { id: 'castle', name: 'MOON CASTLE', ride: 'BROOM', power: 'slipstream', powerName: 'SLIPSTREAM', powerHint: '2 seconds of double speed',
+  { id: 'castle', name: 'MOON CASTLE', ride: 'GLIDER', power: 'slipstream', powerName: 'SLIPSTREAM', powerHint: '2 seconds of double speed',
     sky: { stops: [[0, '#03040f'], [0.35, '#0d1440'], [0.5, '#2c2a66'], [0.56, '#0b0f2a'], [1, '#03040f']], stars: 1800, aurora: ['#5effc8', '#7a9cff', '#c88bff'] },
     fog: '#121a40', fogDensity: 0.005, hemi: ['#9fb0ff', '#1a2a1e', 0.55], sun: ['#cfd8ff', 0.55],
     floor: 'cobble', tint: { blue: '#b6c6ff', orange: '#e6d2a8' }, ground: '#1b2e22', lines: '#c9d6ff', edge: '#c9d6ff',
     decor: 'castle', particles: { kind: 'fireflies', color: '#d8ff6a', count: 150, size: 0.2 },
     rock: { geo: 'dode', color: '#8b8378', emissive: '#000000', glow: 0, metal: 0, rough: 0.95 },
-    hoop: { tube: 0.1, seg: 64 }, disc: 'dv-quaffle', trail: '#ffd9a0', wind: '#c9d6ff', arm: '#d8c9a3', ink: '#ffffff' },
+    hoop: { tube: 0.1, seg: 64 }, disc: 'dv-moonstone', trail: '#ffd9a0', wind: '#c9d6ff', arm: '#d8c9a3', ink: '#ffffff' },
   { id: 'gym', name: 'DREAM GYM', ride: 'HOVERBOARD', power: 'mitt', powerName: 'CATCH MITT', powerHint: 'huge grab range for 2 seconds. Fast throws stun rivals',
     sky: { stops: [[0, '#b9a6ff'], [0.35, '#f6c6ea'], [0.5, '#ffd9b8'], [0.56, '#f6c6ea'], [1, '#b9a6ff']], stars: 0, puffs: '#ffffff' },
     fog: '#f6d2ea', fogDensity: 0.004, hemi: ['#ffffff', '#c9a0c0', 1.0], sun: ['#fff2e0', 0.9],
@@ -138,11 +138,12 @@ const ARENAS = [
     winds: [[{ x: -26, dir: -1 }, { x: 26, dir: 1 }], [{ x: -26, dir: 1 }, { x: 26, dir: -1 }], [{ x: -12, dir: -1 }, { x: 12, dir: 1 }, { x: -38, dir: 1 }, { x: 38, dir: -1 }]] }
 ];
 
+// comet = seconds into the match when the comet appears. Comet Chase keeps the old id 'snitch' so saved best scores still match.
 const MODES = [
-  { id: 'hoops', name: 'CLASSIC HOOPS', short: 'Score through rival hoops', blurb: 'Throw the disc through the rival hoops.', time: 240, bots: true, hoops: true, snitch: [60, 150], ranked: true },
-  { id: 'core', name: 'KING OF THE CORE', short: 'Hold the disc in the core', blurb: 'Hold the disc inside the glowing core: 1 point a second. First to 30.', time: 240, bots: true, hoops: false, core: true, target: 30, snitch: [], ranked: true },
-  { id: 'snitch', name: 'SNITCH HUNT', short: 'Snitch every 20 seconds', blurb: 'The snitch comes back every 20 seconds. Hoops count too.', time: 180, bots: true, hoops: true, snitch: [20, 40, 60, 80, 100, 120, 140, 160], ranked: true },
-  { id: 'practice', name: 'TRICK PRACTICE', short: 'No bots, just you', blurb: 'No bots. Practice throws, curves and bank shots.', time: 180, bots: false, hoops: true, snitch: [], ranked: false }
+  { id: 'hoops', name: 'CLASSIC HOOPS', short: 'Score through rival hoops', blurb: 'Throw the disc through the rival hoops.', time: 240, bots: true, hoops: true, comet: [60, 150], ranked: true },
+  { id: 'core', name: 'KING OF THE CORE', short: 'Hold the disc in the core', blurb: 'Hold the disc inside the glowing core: 1 point a second. First to 30.', time: 240, bots: true, hoops: false, core: true, target: 30, comet: [], ranked: true },
+  { id: 'snitch', name: 'COMET CHASE', short: 'Comet every 20 seconds', blurb: 'The comet comes back every 20 seconds. Hoops count too.', time: 180, bots: true, hoops: true, comet: [20, 40, 60, 80, 100, 120, 140, 160], ranked: true },
+  { id: 'practice', name: 'TRICK PRACTICE', short: 'No bots, just you', blurb: 'No bots. Practice throws, curves and bank shots.', time: 180, bots: false, hoops: true, comet: [], ranked: false }
 ];
 
 // Bot difficulty. New players start on Rookie; the choice is remembered. rating = the bots' strength for rank changes.

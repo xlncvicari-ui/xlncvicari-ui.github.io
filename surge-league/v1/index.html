@@ -25,7 +25,7 @@ const DEG = Math.PI / 180;
 
 // Frisbee-shaped arena: a wide round field, blue half at +z, orange half at -z.
 const ARENA_R = 60, Y_MIN = 2, Y_MAX = 40, GOAL_Z = 52;
-const PLAYER_R = 0.6, DISC_R = 0.32, BOT_R = 0.8, SNITCH_R = 0.2;
+const PLAYER_R = 0.6, DISC_R = 0.32, BOT_R = 0.8, COMET_R = 0.2;
 
 const THRUST = 12, MAX_SPEED = 12, DRAG = 0.35;
 const BOOST_BURST = 12, BOOST_MAX = 24, BOOST_TIME = 0.6, BOOST_COOL = 0.8, BOOST_COST = 20;
@@ -46,7 +46,7 @@ const THROW_ASSIST = 5 * DEG, EASY_ASSIST = 8 * DEG;
 const BOT_SPEED = 11, BOT_ACCEL = 16, BOT_THROW = 26, BOT_SHOOT = 16, BOT_CATCH_R = 1.2;
 // Steals only work from the carrier's front or side: dot(carrier facing, direction to thief) must be above this.
 const STEAL_R = 1.6, BEHIND_DOT = -0.25;
-const SNITCH_SPEED = 16, SNITCH_FIRST = 45, SNITCH_EVERY = 60, SNITCH_POINTS = 3;
+const COMET_SPEED = 16, COMET_FIRST = 45, COMET_EVERY = 60, COMET_POINTS = 3;
 const ROUND_SECONDS = 240;
 
 const QUIET_SPEED = 0.12, QUIET_SECONDS = 15, WEAK_THROW = 1.8, STRONG_SWING = 2.5;
@@ -68,7 +68,7 @@ const POCKETS_CENTER = [{ x: -10, y: 12, z: 0 }, { x: 10, y: 12, z: 0 }];
 const BOT_DEFS = [
   { team: 'blue', label: 'ALLY', start: [8, 14, 40], lane: 1 },
   { team: 'orange', label: 'ORANGE 1', start: [-8, 14, -40], lane: -1 },
-  { team: 'orange', label: 'ORANGE 2', start: [8, 14, -40], lane: 1, seeker: true }
+  { team: 'orange', label: 'ORANGE 2', start: [8, 14, -40], lane: 1, hunter: true }
 ];
 const PLAYER_START = new T.Vector3(0, 14, 40);
 const UP = new T.Vector3(0, 1, 0);
@@ -171,8 +171,8 @@ AFRAME.registerComponent('surge-game', {
     this.headEl = $('head');
     this.discObj = $('disc').object3D;
     this.discSpinObj = $('discSpin').object3D;
-    this.snitchObj = $('snitch').object3D;
-    this.wings = [$('wingL').object3D, $('wingR').object3D];
+    this.cometObj = $('comet').object3D;
+    this.cometCore = $('cometCore').object3D; this.cometTail = $('cometTail').object3D;
     this.gloveEls = { left: $('gloveL'), right: $('gloveR') };
     this.thrusterGlow = $('thrusterGlow');
     this.hudText = $('hudText');
@@ -180,7 +180,7 @@ AFRAME.registerComponent('surge-game', {
     this.scoreEl = $('score');
     this.disc = { pos: new T.Vector3(), vel: new T.Vector3(), quat: new T.Quaternion(), holder: null, hand: null,
                   pulledBy: null, snapping: false, lastThrower: null, noCatch: 0, spin: 0, spinAngle: 0 };
-    this.snitch = { active: false, pos: new T.Vector3(), vel: new T.Vector3(), target: new T.Vector3(), retarget: 0, nextIn: SNITCH_FIRST };
+    this.comet = { active: false, pos: new T.Vector3(), vel: new T.Vector3(), target: new T.Vector3(), retarget: 0, nextIn: COMET_FIRST };
     this.vel = new T.Vector3();
     this.holdVel = new T.Vector3();
     this.anchors = { left: null, right: null };
@@ -338,7 +338,7 @@ AFRAME.registerComponent('surge-game', {
     this.score = { blue: 0, orange: 0 };
     this.timeLeft = ROUND_SECONDS;
     this.newBest = false;
-    this.snitch.active = false; this.snitch.nextIn = SNITCH_FIRST;
+    this.comet.active = false; this.comet.nextIn = COMET_FIRST;
     this.kickoff();
   },
 
@@ -482,7 +482,7 @@ AFRAME.registerComponent('surge-game', {
     this.updateMode(inp, dt, live);
     this.movePlayer(inp, dt, live);
     this.updateDisc(inp, dt, live);
-    this.updateSnitch(inp, dt, live);
+    this.updateComet(inp, dt, live);
     this.updateBots(dt, live);
     this.updateComfort(dt);
     this.updateHud(dt);
@@ -542,7 +542,7 @@ AFRAME.registerComponent('surge-game', {
     if (this.score.blue > this.best) { this.best = this.score.blue; this.newBest = true; saveBest(this.best); }
     beep(523, 200, 0.12); beep(392, 400, 0.12, 'sine', 0.2);
     this.disc.holder = null;
-    this.snitch.active = false;
+    this.comet.active = false;
     this.hudT = 0;
   },
 
@@ -850,8 +850,8 @@ AFRAME.registerComponent('surge-game', {
     this.stateT = 1.5;
   },
 
-  updateSnitch(inp, dt, live) {
-    const s = this.snitch;
+  updateComet(inp, dt, live) {
+    const s = this.comet;
     if (!live) return;
     if (!s.active) {
       s.nextIn -= dt;
@@ -860,7 +860,7 @@ AFRAME.registerComponent('surge-game', {
         const a = Math.random() * Math.PI * 2, r = Math.random() * 40;
         s.pos.set(r * Math.cos(a), 10 + Math.random() * 25, r * Math.sin(a));
         s.vel.set(0, 0, 0); s.retarget = 0;
-        this.flash(`THE SNITCH IS OUT! +${SNITCH_POINTS}`, 2.5);
+        this.flash(`THE COMET IS OUT! +${COMET_POINTS}`, 2.5);
         beep(1200, 80, 0.08); beep(1500, 80, 0.08, 'sine', 0.1); beep(1800, 120, 0.08, 'sine', 0.2);
       }
       return;
@@ -874,34 +874,34 @@ AFRAME.registerComponent('surge-game', {
     const desired = tmp.subVectors(s.target, s.pos);
     const away = tmp2.subVectors(s.pos, this.headPos);
     if (away.length() < 10) desired.add(away.normalize().multiplyScalar(20));
-    desired.setLength(SNITCH_SPEED);
+    desired.setLength(COMET_SPEED);
     s.vel.lerp(desired, 1 - Math.exp(-3 * dt));
     s.pos.addScaledVector(s.vel, dt);
-    resolveSphere(s.pos, s.vel, SNITCH_R, 0.9, this.obstacles);
+    resolveSphere(s.pos, s.vel, COMET_R, 0.9, this.obstacles);
 
     for (const h of inp.hands) {
       const got = (this.easy || h.desktop) ? (h.trigger && this.aimedAt(h, s.pos, 6, 0.8)) : (h.grip && h.glove.distanceTo(s.pos) < SNAP_R * 0.7);
-      if (got) return this.catchSnitch('blue', h, true);
+      if (got) return this.catchComet('blue', h, true);
     }
-    for (const b of this.bots) if (b.stun === 0 && b.pos.distanceTo(s.pos) < BOT_CATCH_R + SNITCH_R) return this.catchSnitch(b.team, null, false);
+    for (const b of this.bots) if (b.stun === 0 && b.pos.distanceTo(s.pos) < BOT_CATCH_R + COMET_R) return this.catchComet(b.team, null, false);
   },
 
-  catchSnitch(team, h, byPlayer) {
-    const s = this.snitch;
-    s.active = false; s.nextIn = SNITCH_EVERY;
-    this.score[team] += SNITCH_POINTS;
+  catchComet(team, h, byPlayer) {
+    const s = this.comet;
+    s.active = false; s.nextIn = COMET_EVERY;
+    this.score[team] += COMET_POINTS;
     if (team === 'blue') {
-      this.flash(`${byPlayer ? 'YOU' : 'YOUR ALLY'} CAUGHT THE SNITCH! +${SNITCH_POINTS}`, 2.5);
+      this.flash(`${byPlayer ? 'YOU' : 'YOUR ALLY'} CAUGHT THE COMET! +${COMET_POINTS}`, 2.5);
       pulse(h, 1, 250);
       beep(880, 100, 0.12); beep(1320, 100, 0.12, 'sine', 0.1); beep(1760, 300, 0.12, 'sine', 0.2);
     } else {
-      this.flash(`ORANGE CAUGHT THE SNITCH +${SNITCH_POINTS}`, 2.5);
+      this.flash(`ORANGE CAUGHT THE COMET +${COMET_POINTS}`, 2.5);
       beep(300, 300, 0.12, 'sawtooth');
     }
   },
 
   updateBots(dt, live) {
-    const d = this.disc, s = this.snitch;
+    const d = this.disc, s = this.comet;
     if (!live) { for (const b of this.bots) b.vel.multiplyScalar(Math.exp(-3 * dt)); return; }
     const botSpeed = this.easy ? BOT_SPEED * 0.85 : BOT_SPEED;
     const free = d.holder === null;
@@ -910,7 +910,7 @@ AFRAME.registerComponent('surge-game', {
       for (const team of ['blue', 'orange']) {
         let best = Infinity, pick = null;
         for (const b of this.bots) {
-          if (b.team !== team || b.stun > 0 || (s.active && b.seeker)) continue;
+          if (b.team !== team || b.stun > 0 || (s.active && b.hunter)) continue;
           const dist = b.pos.distanceTo(d.pos);
           if (dist < best) { best = dist; pick = b; }
         }
@@ -943,7 +943,7 @@ AFRAME.registerComponent('surge-game', {
           b.cool = 0.8;
           beep(260, 120, 0.08, 'square');
         }
-      } else if (s.active && b.seeker) {
+      } else if (s.active && b.hunter) {
         goal = s.pos.clone().addScaledVector(s.vel, 0.4);
       } else if (holderTeam === b.team) {
         goal = this.posOf(d.holder).clone().add(new T.Vector3(b.lane * 10, 2, Math.sign(attackZ) * 12));
@@ -997,12 +997,13 @@ AFRAME.registerComponent('surge-game', {
     d.spinAngle += d.spin * dt;
     this.discSpinObj.rotation.y = d.spinAngle;
 
-    const s = this.snitch;
-    this.snitchObj.visible = s.active;
+    const s = this.comet;
+    this.cometObj.visible = s.active;
     if (s.active) {
-      this.snitchObj.position.copy(s.pos);
-      const flap = Math.sin(this.time * 40) * 0.6;
-      this.wings[0].rotation.z = flap; this.wings[1].rotation.z = -flap;
+      this.cometObj.position.copy(s.pos);
+      // The comet pulses, and its tail always streams out behind it.
+      this.cometCore.scale.setScalar(1 + Math.sin(this.time * 12) * 0.15);
+      if (s.vel.lengthSq() > 0.01) this.cometTail.quaternion.setFromUnitVectors(UP, tmp.copy(s.vel).normalize().negate());
     }
 
     for (const b of this.bots) {
@@ -1101,7 +1102,7 @@ AFRAME.registerComponent('surge-game', {
     } else if (vr && this.restartHold > 0.15) {
       line3 = 'Keep holding B to restart...';
     }
-    const line2 = this.modeLabel() + (this.snitch.active ? '     SNITCH IS OUT' : '');
+    const line2 = this.modeLabel() + (this.comet.active ? '     COMET IS OUT' : '');
     const txt = `BLUE (you) ${this.score.blue} : ${this.score.orange} ORANGE     ${m}:${s}     BEST ${this.best}\n${line2}` + (line3 ? '\n' + line3 : '');
     if (txt !== this.lastHud) {
       this.lastHud = txt;
@@ -1115,7 +1116,7 @@ AFRAME.registerComponent('surge-game', {
 <body>
 <div id="help">
   <h1>Surge League <small>version 1 (classic)</small></h1>
-  <div>Two against two in a round sky arena: you and your ally (blue) against two orange bots. Throw the disc through the orange hoops at the far end and guard your blue ones. Side hoops are worth 2, the tall middle one 1. Steals only work from the front or side. Catch the golden snitch for 3. Matches last 4 minutes.</div>
+  <div>Two against two in a round sky arena: you and your ally (blue) against two orange bots. Throw the disc through the orange hoops at the far end and guard your blue ones. Side hoops are worth 2, the tall middle one 1. Steals only work from the front or side. Catch the comet for 3. Matches last 4 minutes.</div>
   <div class="cols">
     <div><b>Quest: flying</b><br>Left stick: fly where you look<br>Right stick up/down: rise, sink<br>Right stick sideways: snap turn<br>A or X: boost<br>Grip an air pocket: hold on, pull, let go to fling<br>A: start, hold B: restart, Y: mode<br>Click a stick: pause menu (resume, restart, version 2, home screen)</div>
     <div><b>Quest: your long arms</b><br>Reach out: arms stretch far<br>Grip near the disc: it snaps to your hand<br>Swing and let go: throw<br>Trigger: push the disc from afar<br><b>Easy reach</b> (auto if you move little): point, hold trigger to pull, trigger again to throw</div>
@@ -1158,11 +1159,14 @@ AFRAME.registerComponent('surge-game', {
     <a-sphere radius="0.7" segments-width="16" segments-height="12" material="shader: flat; color: #9ff; opacity: 0.18; transparent: true; depthWrite: false"></a-sphere>
   </a-entity>
 
-  <a-entity id="snitch" visible="false">
-    <a-sphere radius="0.15" segments-width="16" segments-height="12" material="color: #ffd23d; emissive: #ffb000; emissiveIntensity: 0.8; metalness: 0.7; roughness: 0.3"></a-sphere>
-    <a-plane id="wingL" width="0.45" height="0.16" position="-0.27 0.04 0" material="shader: flat; color: #ffffff; opacity: 0.85; transparent: true; side: double"></a-plane>
-    <a-plane id="wingR" width="0.45" height="0.16" position="0.27 0.04 0" material="shader: flat; color: #ffffff; opacity: 0.85; transparent: true; side: double"></a-plane>
-    <a-sphere radius="0.5" segments-width="12" segments-height="8" material="shader: flat; color: #ffd23d; opacity: 0.2; transparent: true; depthWrite: false"></a-sphere>
+  <!-- The comet: a small hot-pink orb with a light tail. The tail points away from where it's flying (set in the game code). -->
+  <a-entity id="comet" visible="false">
+    <a-sphere id="cometCore" radius="0.15" segments-width="16" segments-height="12" material="color: #ffe3f8; emissive: #ff4fd8; emissiveIntensity: 1.1; roughness: 0.35"></a-sphere>
+    <a-entity id="cometTail">
+      <a-cone radius-bottom="0.14" radius-top="0.01" height="1.4" position="0 0.7 0" open-ended="true" segments-radial="12" material="shader: flat; color: #ff4fd8; opacity: 0.3; transparent: true; depthWrite: false; side: double"></a-cone>
+      <a-cone radius-bottom="0.07" radius-top="0.005" height="0.8" position="0 0.4 0" open-ended="true" segments-radial="10" material="shader: flat; color: #ffd6f6; opacity: 0.5; transparent: true; depthWrite: false; side: double"></a-cone>
+    </a-entity>
+    <a-sphere radius="0.5" segments-width="12" segments-height="8" material="shader: flat; color: #ff4fd8; opacity: 0.2; transparent: true; depthWrite: false"></a-sphere>
   </a-entity>
 
   <a-entity id="rig" position="0 12.7 40">

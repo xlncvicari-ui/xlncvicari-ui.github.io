@@ -12,13 +12,13 @@ AFRAME.registerComponent('surge-game', {
     this.headEl = $('head');
     this.discObj = $('disc').object3D;
     this.discSpinObj = $('discSpin').object3D;
-    this.snitchObj = $('snitch').object3D;
-    this.wings = [$('wingL').object3D, $('wingR').object3D];
+    this.cometObj = $('comet').object3D;
+    this.cometCore = $('cometCore').object3D; this.cometTail = $('cometTail').object3D;
     this.gloveEls = { left: $('gloveL'), right: $('gloveR') };
     this.disc = { pos: new T.Vector3(), vel: new T.Vector3(), quat: new T.Quaternion(), holder: null, hand: null, pulledBy: null, snapping: false,
                   tractor: null, tractorT: 0, passTo: null, passT: 0, lastThrower: null, noCatch: 0, holdT: 0, curve: 0, hitCool: 0,
                   bankT: -99, away: 0, spin: 0, spinAngle: 0 };
-    this.snitch = { active: false, pos: new T.Vector3(), vel: new T.Vector3(), target: new T.Vector3(), retarget: 0, spawned: 0 };
+    this.comet = { active: false, pos: new T.Vector3(), vel: new T.Vector3(), target: new T.Vector3(), retarget: 0, spawned: 0 };
     this.vel = new T.Vector3(); this.holdVel = new T.Vector3();
     this.anchors = { left: null, right: null };
     this.power = { cool: 0, t: 0 };
@@ -59,7 +59,7 @@ AFRAME.registerComponent('surge-game', {
     this.ready = true;
   },
 
-  freshStats() { return { goals: 0, steals: 0, passes: 0, snitch: 0, tricks: 0, hits: 0 }; },
+  freshStats() { return { goals: 0, steals: 0, passes: 0, comet: 0, tricks: 0, hits: 0 }; },
 
   // ---------------------------------------------------------------- world building
   add(tag, attrs, parent = this.el) {
@@ -103,7 +103,7 @@ AFRAME.registerComponent('surge-game', {
     this.trail.frustumCulled = false;
     scene.add(this.trail);
     const arrow = () => { const g = new T.ConeGeometry(0.045, 0.15, 8); g.rotateX(Math.PI / 2); const m = new T.Mesh(g, new T.MeshBasicMaterial()); m.visible = false; this.rig.add(m); return m; };
-    this.discArrow = arrow(); this.snitchArrow = arrow();
+    this.discArrow = arrow(); this.cometArrow = arrow();
     // Where your hands are steering: a faint ring ahead of you while you fly.
     this.steerMark = new T.Mesh(new T.RingGeometry(0.2, 0.26, 32), new T.MeshBasicMaterial({ color: '#66ffff', transparent: true, opacity: 0, depthWrite: false, fog: false, toneMapped: false }));
     this.steerMark.visible = false; scene.add(this.steerMark);
@@ -124,7 +124,7 @@ AFRAME.registerComponent('surge-game', {
     // A soft glow around the disc so it's easy to spot from anywhere (brighter when the lights go out).
     this.discGlow = glowSprite('#ffffff', 2.4, 0.45);
     this.discObj.add(this.discGlow);
-    this.snitchObj.add(glowSprite('#ffd23d', 1.8, 0.6));
+    this.cometObj.add(glowSprite('#ff4fd8', 1.8, 0.6));
   },
 
   makeBeam(color, opacity, radius) {
@@ -148,7 +148,7 @@ AFRAME.registerComponent('surge-game', {
   buildBots() {
     const defs = [{ team: 'blue', label: 'ALLY', start: [8, 14, 40], lane: 1 },
                   { team: 'orange', label: 'ORANGE 1', start: [-8, 14, -40], lane: -1 },
-                  { team: 'orange', label: 'ORANGE 2', start: [8, 14, -40], lane: 1, seeker: true }];
+                  { team: 'orange', label: 'ORANGE 2', start: [8, 14, -40], lane: 1, hunter: true }];
     const add = (t, a, p) => this.add(t, a, p);
     this.bots = defs.map(def => {
       const el = add('a-entity', {}), col = TEAM_COLOR[def.team];
@@ -166,8 +166,11 @@ AFRAME.registerComponent('surge-game', {
       add('a-cylinder', { radius: 0.9, height: 0.16, 'segments-radial': 20, material: `color: ${col}; emissive: ${col}; emissiveIntensity: 0.35; metalness: 0.4` }, rides.saucer);
       add('a-box', { width: 1.1, height: 0.5, depth: 0.8, position: '0 0.05 0', material: 'color: #5f6670; metalness: 0.7; roughness: 0.4' }, rides.foundry);
       add('a-box', { width: 1.12, height: 0.12, depth: 0.82, position: '0 0.2 0', material: `color: ${col}; emissive: ${col}; emissiveIntensity: 0.4` }, rides.foundry);
-      add('a-cylinder', { radius: 0.04, height: 2.1, rotation: '90 0 0', position: '0 0.1 0.2', color: '#7a5230' }, rides.castle);
-      add('a-cone', { 'radius-bottom': 0.25, 'radius-top': 0.05, height: 0.7, rotation: '90 0 0', position: '0 0.1 -0.95', color: '#d9b45a' }, rides.castle);
+      // Sky glider: dark-wood deck with a pointed nose, swept brass wings and a keel glowing in team color.
+      add('a-box', { width: 0.42, height: 0.06, depth: 1.5, position: '0 0 -0.05', material: 'color: #4a2f1c; roughness: 0.7' }, rides.castle);
+      add('a-cone', { 'radius-bottom': 0.21, 'radius-top': 0.02, height: 0.42, rotation: '90 0 0', scale: '1 1 0.3', position: '0 0 0.91', material: 'color: #4a2f1c; roughness: 0.7' }, rides.castle);
+      for (const sx of [-1, 1]) add('a-box', { width: 0.7, height: 0.025, depth: 0.26, position: `${sx * 0.5} -0.01 -0.15`, rotation: `0 ${sx * 28} 0`, material: 'color: #b8913f; metalness: 0.7; roughness: 0.35' }, rides.castle);
+      add('a-box', { width: 0.04, height: 0.08, depth: 1.3, position: '0 -0.07 -0.05', material: `color: ${col}; emissive: ${col}; emissiveIntensity: 0.6` }, rides.castle);
       add('a-box', { width: 0.5, height: 0.07, depth: 1.4, material: `color: ${col}; emissive: ${col}; emissiveIntensity: 0.4` }, rides.gym);
       for (const [x, s] of [[-0.45, 0.42], [0, 0.55], [0.45, 0.42]]) add('a-sphere', { radius: s, position: `${x} 0 0`, 'segments-width': 12, 'segments-height': 8, material: `color: #ffffff; emissive: ${col}; emissiveIntensity: 0.15` }, rides.cloud);
       const start = new T.Vector3(...def.start);
@@ -211,7 +214,7 @@ AFRAME.registerComponent('surge-game', {
     world.group.visible = true;
     for (const r of REALMS) this.$('ride-' + r.id).object3D.visible = r.id === realm.id;
     for (const b of this.bots) for (const id in b.rides) b.rides[id].object3D.visible = id === realm.id;
-    for (const id of ['dv-disc', 'dv-puck', 'dv-quaffle', 'dv-dodgeball']) this.$(id).object3D.visible = id === realm.disc;
+    for (const id of ['dv-disc', 'dv-puck', 'dv-moonstone', 'dv-dodgeball']) this.$(id).object3D.visible = id === realm.disc;
     this.trail.material.color.set(realm.trail);
     this.discGlow.material.color.set(realm.trail);
     for (const k of ['armL', 'armR']) this.beams[k].material.color.set(realm.arm);
@@ -387,7 +390,7 @@ AFRAME.registerComponent('surge-game', {
     this.timeLeft = this.mode.time;
     this.result = null;
     this.stats = this.freshStats();
-    this.snitch.active = false; this.snitch.spawned = 0;
+    this.comet.active = false; this.comet.spawned = 0;
     this.activeBots = this.mode.bots ? this.bots : [];
     for (const b of this.bots) { b.obj.visible = this.activeBots.includes(b); b.trail.visible = b.obj.visible; }
     if (this.surge) this.endSurge(true);
@@ -479,7 +482,7 @@ AFRAME.registerComponent('surge-game', {
     this.state = 'over';
     // Ended upside down? Blink and stand upright so the menu is level.
     if (UP.clone().applyQuaternion(this.rig.quaternion).y < 0.999) { this.blinkT = 0.35; this.rig.rotation.set(0, 0, 0); this.steerDir = null; }
-    this.disc.holder = null; this.snitch.active = false;
+    this.disc.holder = null; this.comet.active = false;
     this.result = Profiles.record(this.save, { mode: this.mode.id, arena: this.arena.id, realm: this.realm.id, level: this.level.name, ranked: this.mode.ranked && this.mode.bots,
                                                botRating: this.level.rating, scoreFor: this.score.blue, scoreAgainst: this.score.orange, stats: this.stats });
     if (this.net.match) this.net.send('result', { room: this.net.match.room, score: this.score, stats: this.stats });
@@ -620,7 +623,7 @@ AFRAME.registerComponent('surge-game', {
     this.updateArena(dt);
     this.movePlayer(inp, dt, live);
     this.updateDisc(inp, dt, live);
-    this.updateSnitch(inp, dt, live);
+    this.updateComet(inp, dt, live);
     this.updateBots(dt, live);
     if (live) { this.bumpBodies(); this.coach(inp, dt); this.updateCore(dt); }
     this.updateNet(inp);
@@ -1624,16 +1627,16 @@ AFRAME.registerComponent('surge-game', {
     if (this.score[team] >= this.mode.target) { this.timeLeft = 0; this.endMatch(); }
   },
 
-  // ---------------------------------------------------------------- snitch
-  updateSnitch(inp, dt, live) {
-    const s = this.snitch, times = this.mode.snitch;
+  // ---------------------------------------------------------------- comet
+  updateComet(inp, dt, live) {
+    const s = this.comet, times = this.mode.comet;
     if (!live) return;
     const elapsed = this.mode.time - this.timeLeft;
     if (!s.active) {
       if (s.spawned < times.length && elapsed >= times[s.spawned]) {
         s.active = true; s.spawned++;
         s.pos.set(0, 22, 0); s.vel.set(0, 0, 0); s.retarget = 0;
-        this.flash(`THE SNITCH IS OUT! +${SNITCH_POINTS}`, 2.5);
+        this.flash(`THE COMET IS OUT! +${COMET_POINTS}`, 2.5);
         beep(1200, 80, 0.08); beep(1500, 80, 0.08, 'sine', 0.1); beep(1800, 120, 0.08, 'sine', 0.2);
       }
       return;
@@ -1647,25 +1650,25 @@ AFRAME.registerComponent('surge-game', {
     let nearest = null, nd = Infinity;
     for (const a of this.agents()) { const dd = this.posOf(a).distanceTo(s.pos); if (dd < nd) { nd = dd; nearest = a; } }
     if (nearest && nd < 10) desired.add(tmp2.subVectors(s.pos, this.posOf(nearest)).normalize().multiplyScalar(20));
-    desired.setLength(SNITCH_SPEED);
+    desired.setLength(COMET_SPEED);
     s.vel.lerp(desired, 1 - Math.exp(-3 * dt));
     s.pos.addScaledVector(s.vel, dt);
-    resolveSphere(s.pos, s.vel, SNITCH_R, 0.9, this.obstacles);
+    resolveSphere(s.pos, s.vel, COMET_R, 0.9, this.obstacles);
     const mitt = this.mittOn('player');
     for (const h of inp.hands) {
       const got = (this.easy || h.desktop) ? (h.trigger && this.aimedAt(h, s.pos, 6, 0.8)) : (h.grip && h.glove.distanceTo(s.pos) < SNAP_R * (mitt ? 1.6 : 0.7));
-      if (got) return this.catchSnitch('blue', h, true);
+      if (got) return this.catchComet('blue', h, true);
     }
-    for (const b of this.activeBots) if (b.stun === 0 && b.pos.distanceTo(s.pos) < (BOT_CATCH_R + SNITCH_R) * (this.mittOn(b) ? 2.5 : 1)) return this.catchSnitch(b.team, null, false);
+    for (const b of this.activeBots) if (b.stun === 0 && b.pos.distanceTo(s.pos) < (BOT_CATCH_R + COMET_R) * (this.mittOn(b) ? 2.5 : 1)) return this.catchComet(b.team, null, false);
   },
-  catchSnitch(team, h, byPlayer) {
-    this.startBurst(this.snitch.pos, '#ffd23d');
-    this.snitch.active = false;
-    this.score[team] += SNITCH_POINTS * this.pointsMul();
+  catchComet(team, h, byPlayer) {
+    this.startBurst(this.comet.pos, '#ff4fd8');
+    this.comet.active = false;
+    this.score[team] += COMET_POINTS * this.pointsMul();
     this.scoreShowT = 4;
-    if (byPlayer) this.stats.snitch++;
-    if (team === 'blue') { this.flash(`${byPlayer ? 'YOU' : 'YOUR ALLY'} CAUGHT THE SNITCH! +${SNITCH_POINTS}`, 2.5); pulse(h, 1, 250); beep(880, 100, 0.12); beep(1320, 100, 0.12, 'sine', 0.1); beep(1760, 300, 0.12, 'sine', 0.2); }
-    else { this.flash(`ORANGE CAUGHT THE SNITCH +${SNITCH_POINTS}`, 2.5); beep(300, 300, 0.12, 'sawtooth'); }
+    if (byPlayer) this.stats.comet++;
+    if (team === 'blue') { this.flash(`${byPlayer ? 'YOU' : 'YOUR ALLY'} CAUGHT THE COMET! +${COMET_POINTS}`, 2.5); pulse(h, 1, 250); beep(880, 100, 0.12); beep(1320, 100, 0.12, 'sine', 0.1); beep(1760, 300, 0.12, 'sine', 0.2); }
+    else { this.flash(`ORANGE CAUGHT THE COMET +${COMET_POINTS}`, 2.5); beep(300, 300, 0.12, 'sawtooth'); }
   },
 
   // ---------------------------------------------------------------- bots
@@ -1696,13 +1699,13 @@ AFRAME.registerComponent('surge-game', {
   },
 
   updateBots(dt, live) {
-    const d = this.disc, s = this.snitch, bots = this.activeBots;
+    const d = this.disc, s = this.comet, bots = this.activeBots;
     if (!live) { for (const b of bots) b.vel.multiplyScalar(Math.exp(-3 * dt)); return; }
     const botSpeed = BOT_SPEED * this.level.speed * (this.easy ? 0.85 : 1), core = this.mode.core;
     const chaser = {};
     if (d.holder === null && d.away <= 0) for (const team of ['blue', 'orange']) {
       let best = Infinity, pick = null;
-      for (const b of bots) { if (b.team !== team || b.stun > 0 || (s.active && b.seeker)) continue; const dist = b.pos.distanceTo(d.pos); if (dist < best) { best = dist; pick = b; } }
+      for (const b of bots) { if (b.team !== team || b.stun > 0 || (s.active && b.hunter)) continue; const dist = b.pos.distanceTo(d.pos); if (dist < best) { best = dist; pick = b; } }
       const pd = this.headPos.distanceTo(d.pos);
       if (team === 'blue' && pick && pd < best && pd < 10) pick = null;
       chaser[team] = pick;
@@ -1714,7 +1717,7 @@ AFRAME.registerComponent('surge-game', {
       const holderTeam = d.holder ? this.teamOf(d.holder) : null;
       let goal;
       if (d.holder === b) goal = core ? this.core.position.clone().add(new T.Vector3(b.lane * 2, 0, 0)) : this.botAttack(b);
-      else if (s.active && b.seeker) goal = s.pos.clone().addScaledVector(s.vel, 0.4);
+      else if (s.active && b.hunter) goal = s.pos.clone().addScaledVector(s.vel, 0.4);
       else if (d.passTo === b) goal = d.pos.clone();
       else if (holderTeam === b.team) goal = core ? this.core.position.clone().add(new T.Vector3(b.lane * 8, 3, 0)) : this.posOf(d.holder).clone().add(new T.Vector3(b.lane * 10, 2, Math.sign(-OWN_Z[b.team]) * 12));
       else if (holderTeam) {
@@ -1928,12 +1931,13 @@ AFRAME.registerComponent('surge-game', {
   },
 
   render(inp, dt) {
-    const d = this.disc, s = this.snitch;
+    const d = this.disc, s = this.comet;
     this.discObj.visible = d.away <= 0;
     this.discObj.position.copy(d.pos); this.discObj.quaternion.copy(d.quat);
     d.spinAngle += d.spin * dt; this.discSpinObj.rotation.y = d.spinAngle;
-    this.snitchObj.visible = s.active;
-    if (s.active) { this.snitchObj.position.copy(s.pos); const flap = Math.sin(this.time * 40) * 0.6; this.wings[0].rotation.z = flap; this.wings[1].rotation.z = -flap; }
+    this.cometObj.visible = s.active;
+    // The comet pulses, and its tail always streams out behind it.
+    if (s.active) { this.cometObj.position.copy(s.pos); this.cometCore.scale.setScalar(1 + Math.sin(this.time * 12) * 0.15); if (s.vel.lengthSq() > 0.01) this.cometTail.quaternion.setFromUnitVectors(UP, tmp.copy(s.vel).normalize().negate()); }
     for (const b of this.activeBots) { b.obj.position.copy(b.pos); b.obj.lookAt(tmp.copy(b.pos).add(b.facing)); }
     for (const hp of this.hoops) if (hp.flash > 0) { hp.flash = Math.max(0, hp.flash - dt); hp.mat.emissiveIntensity = 0.7 + hp.flash * 3; }
     // Rocks fade to see-through when you're close so they never block your view.
@@ -2015,7 +2019,7 @@ AFRAME.registerComponent('surge-game', {
 
     const inPlay = this.state !== 'ready' && this.state !== 'over';
     this.pointLocator(this.discArrow, d.pos, d.holder === null ? '#ffffff' : TEAM_COLOR[this.teamOf(d.holder)], inPlay && d.holder !== 'player' && d.away <= 0);
-    this.pointLocator(this.snitchArrow, s.pos, '#ffd23d', s.active);
+    this.pointLocator(this.cometArrow, s.pos, '#ff4fd8', s.active);
 
     for (const side of ['left', 'right']) {
       const h = inp.hands.find(x => x.side === side && !x.desktop), gloveObj = this.gloveEls[side].object3D;
@@ -2074,7 +2078,7 @@ AFRAME.registerComponent('surge-game', {
     const m = Math.floor(this.timeLeft / 60), sec = String(Math.floor(this.timeLeft % 60)).padStart(2, '0'), pw = this.power;
     const sb = {
       blue: this.score.blue, orange: this.score.orange, clock: `${m}:${sec}`, clockWarn: this.timeLeft < 10,
-      mode: this.mode.core ? `${this.mode.name} · FIRST TO ${this.mode.target}` : this.mode.name, realm: `${this.realm.name}${this.snitch.active ? ' · SNITCH OUT' : ''}`,
+      mode: this.mode.core ? `${this.mode.name} · FIRST TO ${this.mode.target}` : this.mode.name, realm: `${this.realm.name}${this.comet.active ? ' · COMET OUT' : ''}`,
       power: `${this.inVR ? 'B' : 'C'}: ${this.realm.powerName} ${pw.t > 0 ? 'ACTIVE' : pw.cool > 0 ? Math.ceil(pw.cool) + 's' : 'READY'}`, powerReady: pw.cool === 0,
       event: this.surge ? `${this.surge.ev.name} ${Math.ceil(this.surge.left)}s` : this.finalSurgeOn ? 'FINAL SURGE x2' : this.buffs.get('player') ? `${this.buffs.get('player').type.name} ${Math.ceil(this.buffs.get('player').t)}s`
            : this.onFire ? `${this.onFire === 'blue' ? 'BLUE' : 'ORANGE'} ON FIRE` : ''

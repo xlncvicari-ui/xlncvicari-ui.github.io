@@ -21,7 +21,7 @@ const Profiles = {
 
   // Individual Surge Score for one match: rewards scoring, smart play and the hard stuff.
   surgeScore(st) {
-    return st.goals * 10 + st.tricks * 20 + st.steals * 5 + st.passes * 3 + st.snitch * 15 + st.hits * 4 + (st.kos || 0) * 8;
+    return st.goals * 10 + st.tricks * 20 + st.steals * 5 + st.passes * 3 + st.comet * 15 + st.hits * 4 + (st.kos || 0) * 8;
   },
 
   // Elo against the bots' strength for the chosen difficulty. Practice matches don't change your rank.
