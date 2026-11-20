@@ -127,15 +127,15 @@ const DECOR = {
     const tower = [];
     around(8, (i, a) => {
       const [x, , z] = polar(a + 0.39, 74, 0), c = teamColorAt(z);
-      tower.push({ geo: G.cyl(4, 18, 10), pos: [x, 9, z], color: '#d8cfbd' }, { geo: G.cone(5, 6, 10), pos: [x, 21, z], color: c },
+      tower.push({ geo: G.cyl(4, 18, 24), pos: [x, 9, z], color: '#d8cfbd' }, { geo: G.cone(5, 6, 24), pos: [x, 21, z], color: c },
                  { geo: G.cyl(0.1, 6, 5), pos: [x, 27, z], color: '#555555' }, { geo: new T.PlaneGeometry(2.4, 1.4), pos: [x + 1.2, 29, z], color: c });
     });
     g.add(solid(tower, { side: T.DoubleSide, roughness: 0.9 }));
-    g.add(solid(around(12, (i, a) => { const h = 60 + (i * 23) % 50; return { geo: G.cone(50, h, 6), pos: polar(a + 0.17, 330, h / 2), color: '#6f8a7a' }; }), { flatShading: true, roughness: 1 }));
+    g.add(buildMountains(12, 330)); // noise-shaped peaks: grass, rock, snow (js/models.js)
     const puffs = [];
     around(16, (i, a) => {
       const r = 140 + (i * 37) % 80, y = 60 + (i * 13) % 30, [cx, , cz] = polar(a + 0.12, r, 0);
-      for (let j = 0; j < 3; j++) puffs.push({ geo: G.ball(6 + (j === 1 ? 2 : 0), 10, 8), pos: [cx + (j - 1) * 6, y + (j === 1 ? 2 : 0), cz] });
+      for (let j = 0; j < 3; j++) puffs.push({ geo: G.ball(6 + (j === 1 ? 2 : 0), 18, 12), pos: [cx + (j - 1) * 6, y + (j === 1 ? 2 : 0), cz] });
     });
     g.add(solid(puffs, { roughness: 1 }));
   }

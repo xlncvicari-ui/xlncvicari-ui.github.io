@@ -185,13 +185,25 @@ const ROCK_STYLE = {
     } };
   },
   castle(p, ob) {
-    // Floating rune stones that bob up and down.
-    const mesh = new T.Group(), mat = stdMat('#8b8378', { roughness: 0.95, flatShading: true, transparent: true });
-    mesh.add(new T.Mesh(new T.DodecahedronGeometry(p.r * 1.05), mat));
-    const rune = new T.Mesh(new T.TorusGeometry(p.r * 1.35, 0.07, 6, 40), addMat('#9fb0ff', 0.75)); rune.rotation.x = Math.PI / 2;
-    mesh.add(rune, glowSprite('#9fb0ff', p.r * 4, 0.25));
+    // Floating standing stones: craggy carved rock with a ring of glowing runes circling them.
+    const St = SURFACES.stone(), N = makeNoise(Math.round(Math.abs(p.x * 3 + p.z * 7)) + 5), geo = new T.IcosahedronGeometry(p.r * 1.0, 3), pos = geo.attributes.position, v = new T.Vector3();
+    for (let i = 0; i < pos.count; i++) {
+      v.fromBufferAttribute(pos, i); const n = v.clone().normalize(), k = 0.86 + N.fbm(Math.atan2(n.z, n.x) * 1.6 + 4, n.y * 2 + 4, 256, 4) * 0.32;
+      pos.setXYZ(i, v.x * k, v.y * k * 1.25, v.z * k);
+    }
+    geo.computeVertexNormals();
+    const mesh = new T.Group(), mat = stdMat('#e2dccf', { map: St.map, normalMap: St.normalMap, roughness: 0.95, transparent: true });
+    mesh.add(new T.Mesh(geo, mat));
+    const glyphs = [];
+    around(9, (i, a) => {
+      const r = p.r * 1.4, x = Math.cos(a) * r, z = Math.sin(a) * r, yaw = -a / DEG + 90;
+      glyphs.push({ geo: G.box(0.1, 0.9, 0.03), pos: [x, 0, z], rot: [0, yaw, 0], color: '#b9c6ff' },
+                  { geo: G.box(0.08, 0.5, 0.03), pos: [x + Math.cos(a + Math.PI / 2) * 0.15, 0.15, z + Math.sin(a + Math.PI / 2) * 0.15], rot: [0, yaw, i % 2 ? 40 : -40], color: '#b9c6ff' });
+    });
+    const rune = new T.Mesh(mergeParts(glyphs), new T.MeshBasicMaterial({ vertexColors: true, transparent: true, opacity: 0.9, blending: T.AdditiveBlending, depthWrite: false, fog: false }));
+    mesh.add(rune, glowSprite('#9fb0ff', p.r * 4, 0.2));
     const base = ob.c.clone();
-    return { mesh, mats: [mat], update: (dt, t) => { ob.c.y = base.y + Math.sin(t * 0.8) * 1.6; mesh.position.copy(ob.c); mesh.rotation.y += dt * 0.25; rune.rotation.z += dt; } };
+    return { mesh, mats: [mat], update: (dt, t) => { ob.c.y = base.y + Math.sin(t * 0.8) * 1.6; mesh.position.copy(ob.c); mesh.rotation.y += dt * 0.25; rune.rotation.y -= dt * 0.6; } };
   },
   gym(p, ob) {
     // Giant beach balls: extra bouncy.
@@ -285,18 +297,20 @@ const COVER_STYLE = {
     for (const sx of [-1, 1]) for (const sz of [-1, 1]) glow.push({ geo: G.box(e, b.h, e), pos: [sx * hw, 0, sz * hd], color: '#66ffff' });
     for (const sy of [-1, 1]) for (const sz of [-1, 1]) glow.push({ geo: G.box(b.w, e, e), pos: [0, sy * hh, sz * hd], color: '#ff4fd8' });
     for (const sy of [-1, 1]) for (const sx of [-1, 1]) glow.push({ geo: G.box(e, e, b.d), pos: [sx * hw, sy * hh, 0], color: '#66ffff' });
-    return { solid: [{ geo: G.box(b.w, b.h, b.d), pos: [0, 0, 0], color: '#1d1840' }], glow, opts: { metalness: 0.7, roughness: 0.3 } };
+    const P = SURFACES.panel();
+    return { solid: [{ geo: roundedBox(b.w, b.h, b.d, 0.08, 2), pos: [0, 0, 0], color: '#433c88' }], glow, opts: { metalness: 0.6, roughness: 0.34, map: P.map, normalMap: P.normalMap } };
   },
   foundry(b) {
     // A shipping container with ribs and a hazard stripe.
-    const parts = [{ geo: G.box(b.w, b.h, b.d), pos: [0, 0, 0], color: '#8a3b22' }];
+    const parts = [{ geo: roundedBox(b.w, b.h, b.d, 0.05, 1), pos: [0, 0, 0], color: '#9a4428' }];
     const long = b.w >= b.d, n = Math.max(3, Math.round((long ? b.w : b.d) / 0.8));
     for (let i = 0; i < n; i++) {
       const t = -0.5 + (i + 0.5) / n;
       parts.push(long ? { geo: G.box(0.12, b.h * 0.94, b.d + 0.08), pos: [t * b.w, 0, 0], color: '#6e2f1b' } : { geo: G.box(b.w + 0.08, b.h * 0.94, 0.12), pos: [0, 0, t * b.d], color: '#6e2f1b' });
     }
     for (let i = 0; i < 8; i++) parts.push({ geo: G.box(long ? b.w / 8 : b.w + 0.1, 0.35, long ? b.d + 0.1 : b.d / 8), pos: [long ? (i - 3.5) * b.w / 8 : 0, b.h / 2 - 0.25, long ? 0 : (i - 3.5) * b.d / 8], color: i % 2 ? '#1a1a1a' : '#ffcc00' });
-    return { solid: parts, opts: { metalness: 0.6, roughness: 0.55 } };
+    const R = SURFACES.rust();
+    return { solid: parts, opts: { metalness: 0.5, roughness: 0.62, map: R.map, normalMap: R.normalMap } };
   },
   castle(b) {
     // A ruined stone wall: stacked blocks with a broken, uneven top.
@@ -307,25 +321,28 @@ const COVER_STYLE = {
       const bl = len / cols, bh = b.h / rows, off = (r % 2 ? 0.25 : -0.25) * bl;
       const t = -len / 2 + (c + 0.5) * bl + off;
       if (Math.abs(t) > len / 2 - bl * 0.2) continue;
-      const v = 0.85 + rnd() * 0.15, col = `rgb(${Math.round(110 * v)},${Math.round(114 * v)},${Math.round(130 * v)})`;
-      parts.push({ geo: G.box(long ? bl * 0.96 : thick, bh * 0.94, long ? thick : bl * 0.96), pos: [long ? t : 0, -b.h / 2 + (r + 0.5) * bh, long ? 0 : t], color: col });
+      const v = 0.85 + rnd() * 0.15, col = `rgb(${Math.round(150 * v)},${Math.round(153 * v)},${Math.round(168 * v)})`;
+      parts.push({ geo: roundedBox(long ? bl * 0.96 : thick, bh * 0.94, long ? thick : bl * 0.96, 0.07, 1), pos: [long ? t : 0, -b.h / 2 + (r + 0.5) * bh, long ? 0 : t], color: col });
     }
-    return { solid: parts, opts: { roughness: 0.95, flatShading: true } };
+    const St = SURFACES.stone();
+    return { solid: parts, opts: { roughness: 0.92, map: St.map, normalMap: St.normalMap, normalScale: new T.Vector2(1.2, 1.2) } };
   },
   gym(b) {
     // Giant stacked foam blocks in pastel colors.
     const parts = [], cols = ['#ff9ecf', '#9fd3ff', '#ffe08a', '#b6f0a8', '#d2b6ff'], rows = Math.max(2, Math.round(b.h / 1.6));
     for (let r = 0; r < rows; r++) {
       const bh = b.h / rows;
-      parts.push({ geo: G.box(b.w * (r % 2 ? 0.94 : 1), bh * 0.97, b.d * (r % 2 ? 1 : 0.94)), pos: [0, -b.h / 2 + (r + 0.5) * bh, 0], color: cols[(r + Math.round(Math.abs(b.x + b.z))) % cols.length] });
+      parts.push({ geo: roundedBox(b.w * (r % 2 ? 0.94 : 1), bh * 0.97, b.d * (r % 2 ? 1 : 0.94), 0.2, 3), pos: [0, -b.h / 2 + (r + 0.5) * bh, 0], color: cols[(r + Math.round(Math.abs(b.x + b.z))) % cols.length] });
     }
-    return { solid: parts, opts: { roughness: 0.6 } };
+    const F = SURFACES.foam();
+    return { solid: parts, opts: { roughness: 0.82, map: F.map, normalMap: F.normalMap } };
   },
   cloud(b) {
     // White marble with gold trim.
-    return { solid: [{ geo: G.box(b.w, b.h * 0.86, b.d), pos: [0, 0, 0], color: '#f2efe8' },
-                     { geo: G.box(b.w + 0.3, b.h * 0.07, b.d + 0.3), pos: [0, b.h * 0.465, 0], color: '#e8c46a' },
-                     { geo: G.box(b.w + 0.3, b.h * 0.07, b.d + 0.3), pos: [0, -b.h * 0.465, 0], color: '#e8c46a' }], opts: { roughness: 0.4, metalness: 0.1 } };
+    const M = SURFACES.marble();
+    return { solid: [{ geo: roundedBox(b.w, b.h * 0.86, b.d, 0.06, 2), pos: [0, 0, 0], color: '#ffffff' },
+                     { geo: roundedBox(b.w + 0.3, b.h * 0.07, b.d + 0.3, 0.05, 2), pos: [0, b.h * 0.465, 0], color: '#e0b85a' },
+                     { geo: roundedBox(b.w + 0.3, b.h * 0.07, b.d + 0.3, 0.05, 2), pos: [0, -b.h * 0.465, 0], color: '#e0b85a' }], opts: { roughness: 0.28, metalness: 0.12, map: M.map, normalMap: M.normalMap } };
   }
 };
 function buildCover(realm, boxes) {

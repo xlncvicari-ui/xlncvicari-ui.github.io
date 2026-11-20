@@ -225,15 +225,15 @@ function paintHowTo(g, W, H, panel, m) {
     callout(g, L.trigger, [lx, ys[0]], 'TRIGGER  PASS', 'point at your ally', 'right');
     callout(g, L.y, [lx, ys[1]], 'Y  PAUSE', 'menu, settings, exit', 'right');
     callout(g, L.stick, [lx, ys[2]], 'STICK  FLY · PUSH = BOOST', 'go where your hands point', 'right');
-    callout(g, L.x, [lx, ys[3]], 'X  RIGHT SIDE UP', 'after flips and loops', 'right');
+    callout(g, L.x, [lx, ys[3]], 'X  TURN AROUND', 'a quick 180° turn', 'right');
     callout(g, L.grip, [lx, ys[4]], 'GRIP  GRAB', 'disc, or hold an air pocket', 'right');
     callout(g, R.trigger, [rx, ys[0]], 'TRIGGER  PULL', 'point at the disc', 'left');
     callout(g, R.b, [rx, ys[1]], 'B  POWER', m.power, 'left');
-    callout(g, R.stick, [rx, ys[2]], 'STICK  UP/DOWN · PUSH = BOOST', 'sideways to turn', 'left');
-    callout(g, R.a, [rx, ys[3]], 'A  RIGHT SIDE UP', 'and select in menus', 'left');
+    callout(g, R.stick, [rx, ys[2]], 'STICK  UP/DOWN · PUSH = BOOST', 'flick sideways to snap turn', 'left');
+    callout(g, R.a, [rx, ys[3]], 'A  TURN AROUND', 'and select in menus', 'left');
     callout(g, R.grip, [rx, ys[4]], 'GRIP  THROW', 'swing and let go', 'left');
   } else {
-    const keys = [['WASD', 'fly where you look'], ['E / Q', 'up / down'], ['SHIFT', 'boost (hold to keep going)'], ['L', 'right side up'], ['HOLD G', 'pull the disc'], ['SPACE', 'throw'], ['F', 'pass'], ['C', 'realm power'], ['V', 'punch'], ['P', 'pause']];
+    const keys = [['WASD', 'fly where you look'], ['E / Q', 'up / down'], ['SHIFT', 'boost (hold to keep going)'], ['L', 'turn around'], ['HOLD G', 'pull the disc'], ['SPACE', 'throw'], ['F', 'pass'], ['C', 'realm power'], ['V', 'punch'], ['P', 'pause']];
     keys.forEach(([k, v], i) => {
       const x = 180 + (i % 2) * 760, y = 170 + Math.floor(i / 2) * 105;
       g.fillStyle = 'rgba(102,255,255,0.15)'; rrect(g, x, y - 36, 190, 72, 16); g.fill();

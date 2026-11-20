@@ -23,8 +23,8 @@ const COMBAT = {
   buildHpBar(b) {
     const mk = (color, op) => { const s = new T.Sprite(new T.SpriteMaterial({ color, transparent: true, opacity: op, depthWrite: false, fog: false, toneMapped: false })); s.center.set(0, 0.5); b.obj.add(s); return s; };
     const back = mk('#000000', 0.5), fill = mk('#66ff99', 0.95);
-    back.scale.set(1.0, 0.09, 1); back.position.set(-0.5, 1.42, 0);
-    fill.scale.set(1.0, 0.07, 1); fill.position.set(-0.5, 1.42, 0.001);
+    back.scale.set(1.0, 0.09, 1); back.position.set(-0.5, 1.77, 0);
+    fill.scale.set(1.0, 0.07, 1); fill.position.set(-0.5, 1.77, 0.001);
     return { back, fill };
   },
 

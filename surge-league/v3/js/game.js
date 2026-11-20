@@ -28,7 +28,7 @@ AFRAME.registerComponent('surge-game', {
     this.track = { left: { real: [], glove: [], q: null, omega: new T.Vector3() }, right: { real: [], glove: [], q: null, omega: new T.Vector3() } };
     this.keys = {};
     this.save = Profiles.init(loadSave());
-    this.flight = FLIGHT_MODES.includes(this.save.flight) ? this.save.flight : 'free';
+    this.flight = FLIGHT_MODES.includes(this.save.flight) ? this.save.flight : 'hands';
     this.level = LEVELS[Math.min(LEVELS.length - 1, this.save.level || 0)];
     this.menu = { row: 0, realm: 'shuffle', arena: 'frisbee', mode: 'hoops', ...this.save.menu };
     this.stats = this.freshStats();
@@ -54,6 +54,7 @@ AFRAME.registerComponent('surge-game', {
     for (const r of REALMS) { this.skies[r.id] = this.makeSky(r); this.envMaps[r.id] = envFromSky(renderer, this.skies[r.id]); }
     this.buildStatic();
     this.buildBots();
+    upgradePlayerRides(this, TEAM_COLOR.blue);
     this.buildPanels();
     this.surge = null; this.nextSurgeAt = 0; this.scoreAlpha = 0; this.scoreShowT = 0; this.toastAlpha = 0; this.hitBuzzAt = 0;
     this.orbs = []; this.buffs = new Map(); this.streak = { team: null, n: 0 }; this.portalFlash = 0;
@@ -163,24 +164,21 @@ AFRAME.registerComponent('surge-game', {
       const el = add('a-entity', {}), col = TEAM_COLOR[def.team];
       // Rider: glossy black helmet and suit with neon team trim (the look from the owner's reference clip): a glowing visor,
       // a band round the helmet and two stripes on the suit.
-      const rider = buildRider(col); rider.group.position.y = 0.3; el.object3D.add(rider.group);
-      const tag = labelSprite(def.label, { color: '#ffffff', bg: hexA(col, 0.55), height: 0.45 }); tag.position.y = 1.65; el.object3D.add(tag);
-      const halo = glowSprite(col, 2.6, 0.35); halo.position.y = 0.75; el.object3D.add(halo);
-      const rides = { saucer: add('a-entity', {}, el), foundry: add('a-entity', {}, el), castle: add('a-entity', {}, el), gym: add('a-entity', {}, el), cloud: add('a-entity', {}, el) };
-      add('a-cylinder', { radius: 0.9, height: 0.16, 'segments-radial': 20, material: `color: ${col}; emissive: ${col}; emissiveIntensity: 0.35; metalness: 0.4` }, rides.saucer);
-      add('a-box', { width: 1.1, height: 0.5, depth: 0.8, position: '0 0.05 0', material: 'color: #5f6670; metalness: 0.7; roughness: 0.4' }, rides.foundry);
-      add('a-box', { width: 1.12, height: 0.12, depth: 0.82, position: '0 0.2 0', material: `color: ${col}; emissive: ${col}; emissiveIntensity: 0.4` }, rides.foundry);
-      add('a-cylinder', { radius: 0.04, height: 2.1, rotation: '90 0 0', position: '0 0.1 0.2', color: '#7a5230' }, rides.castle);
-      add('a-cone', { 'radius-bottom': 0.25, 'radius-top': 0.05, height: 0.7, rotation: '90 0 0', position: '0 0.1 -0.95', color: '#d9b45a' }, rides.castle);
-      add('a-box', { width: 0.5, height: 0.07, depth: 1.4, material: `color: ${col}; emissive: ${col}; emissiveIntensity: 0.4` }, rides.gym);
-      for (const [x, s] of [[-0.45, 0.42], [0, 0.55], [0.45, 0.42]]) add('a-sphere', { radius: s, position: `${x} 0 0`, 'segments-width': 12, 'segments-height': 8, material: `color: #ffffff; emissive: ${col}; emissiveIntensity: 0.15` }, rides.cloud);
+      // Rider (js/models.js): a pilot with armor plates in team color, a mirror visor and neon trim. Rider and ride sit in
+      // a mount that banks into turns and leans with speed. Each bot gets its own helmet shape.
+      const mount = new T.Group(); el.object3D.add(mount);
+      const rider = buildRider(col, defs.indexOf(def)); rider.group.position.y = 0.3; mount.add(rider.group); rider.mount = mount;
+      const tag = labelSprite(def.label, { color: '#ffffff', bg: hexA(col, 0.55), height: 0.45 }); tag.position.y = 2.0; el.object3D.add(tag);
+      const halo = glowSprite(col, 2.1, 0.22); halo.position.y = 0.95; el.object3D.add(halo);
+      const rides = {};
+      for (const r of REALMS) { const m = buildRide(r.id, col); m.position.y = 0.08; m.visible = false; mount.add(m); rides[r.id] = { object3D: m }; }
       const start = new T.Vector3(...def.start);
       // A light trail behind each rider so you can follow them across the field.
       const trailGeo = new T.BufferGeometry(); trailGeo.setAttribute('position', new T.BufferAttribute(new Float32Array(16 * 3), 3));
       const trail = new T.Line(trailGeo, new T.LineBasicMaterial({ color: col, transparent: true, opacity: 0.55 })); trail.frustumCulled = false;
       this.el.object3D.add(trail);
       const blob = makeBlobShadow(2.2); this.el.object3D.add(blob);
-      return { ...def, el, obj: el.object3D, arm: rider.arm, suitMat: rider.suitMat, hitT: 0, blob, rides, start, pos: start.clone(), vel: new T.Vector3(), facing: new T.Vector3(0, 0, def.team === 'blue' ? -1 : 1),
+      return { ...def, el, obj: el.object3D, rider, arm: rider.arm, suitMat: rider.suitMat, hitT: 0, blob, rides, start, pos: start.clone(), vel: new T.Vector3(), facing: new T.Vector3(0, 0, def.team === 'blue' ? -1 : 1),
                stun: 0, cool: 0, grace: 0, power: { cool: 0, t: 0 }, trail, halo, col };
     });
   },
@@ -214,7 +212,12 @@ AFRAME.registerComponent('surge-game', {
       mat.needsUpdate = true;
     });
     this.ground.visible = !!realm.ground;
-    if (realm.ground) this.ground.material.color.set(realm.ground);
+    if (realm.ground) {
+      // Grass realms carry the field's grass out to the horizon instead of a flat color.
+      const grass = realm.floor === 'turf';
+      if (grass && !this.groundTex) this.groundTex = floorTexture('turf', 110);
+      this.ground.material.map = grass ? this.groundTex : null; this.ground.material.color.set(grass ? '#c4d2bc' : realm.ground); this.ground.material.needsUpdate = true;
+    }
     this.lineMat.color.set(realm.lines);
     this.edgeMat.color.set(realm.edge);
     this.wallMat.color.set(realm.edge);
@@ -1144,7 +1147,7 @@ AFRAME.registerComponent('surge-game', {
   movePlayer(inp, dt, live) {
     if (this.playerOut > 0) { this.boosting = false; this.thrustLevel = 0; return; }
     if (inp.inVR) {
-      if (Math.abs(inp.turnX) > 0.7 && Math.abs(inp.climb) < 0.5 && this.snapArmed) { this.snapTurn(inp.turnX > 0 ? -30 : 30, inp.headPos.clone()); this.snapArmed = false; }
+      if (Math.abs(inp.turnX) > 0.7 && Math.abs(inp.climb) < 0.5 && this.snapArmed) { this.snapTurn(inp.turnX > 0 ? -SNAP_DEG : SNAP_DEG); this.snapArmed = false; }
       if (Math.abs(inp.turnX) < 0.3) this.snapArmed = true;
     }
     const d = this.disc, anchored = [];
@@ -1201,6 +1204,7 @@ AFRAME.registerComponent('surge-game', {
       }
       this.boosting = this.boostT > 0;
       this.orientRig(inp, dt, live, thrust);
+      this.tiltRide(inp, dt, live);
       const speedMul = (slip ? 2 : 1) * (this.buffIs('player', 'speed') ? 1.7 : 1);
       if (!live) this.vel.multiplyScalar(Math.exp(-3 * dt));
       else if (this.easy) {
@@ -1236,7 +1240,22 @@ AFRAME.registerComponent('surge-game', {
     if (this.energyIdle > REGEN_DELAY) this.energy = Math.min(ENERGY_MAX, this.energy + REGEN * dt);
   },
 
-  snapTurn(deg) { this.turnAboutHead(() => this.rig.rotateY(deg * DEG)); },
+  // Snap turns: the right stick turns you SNAP_DEG at once, A / X (PC: L) turns you all the way around behind a quick blink.
+  snapTurn(deg) {
+    this.turnAboutHead(() => this.rig.rotateY(deg * DEG));
+    if (Math.abs(deg) < 90) this.snapKick = Math.sign(deg) * RIDE_TILT * 0.9; else this.blinkT = Math.max(this.blinkT || 0, 0.18);
+    if (this.steerDir) this.steerDir.applyAxisAngle(UP, deg * DEG);
+  },
+
+  // The ride banks into slides and snap turns and dips its nose when you speed up. Only the ride moves: your view stays level.
+  tiltRide(inp, dt, live) {
+    const dz = v => Math.abs(v) < 0.15 ? 0 : v, k = 1 - Math.exp(-6 * dt);
+    this.snapKick = (this.snapKick || 0) * Math.exp(-4 * dt);
+    const roll = (live ? -dz(inp.moveX) * RIDE_TILT : 0) + this.snapKick, pitch = live ? (this.boosting ? -1 : -Math.max(0, dz(inp.moveY)) * 0.6) * RIDE_PITCH : 0;
+    this.rideTilt = this.rideTilt || { r: 0, p: 0 };
+    this.rideTilt.r += (roll - this.rideTilt.r) * k; this.rideTilt.p += (pitch - this.rideTilt.p) * k;
+    for (const r of REALMS) { const o = this.$('ride-' + r.id).object3D; if (o.visible) o.rotation.set(this.rideTilt.p, 0, this.rideTilt.r); }
+  },
 
   // Turns the ride (and you with it) around your head, so the turn never slides you sideways.
   turnAboutHead(turn) {
@@ -1274,16 +1293,16 @@ AFRAME.registerComponent('surge-game', {
     return this.steerDir;
   },
 
-  // Free flight: point past the comfortable range and your ride turns to follow, so pointing both hands up and boosting
+  // (FLIP_FLIGHT only) Free flight: point past the comfortable range and your ride turns to follow, so pointing both hands up and boosting
   // loops you over backwards, and you can fly upside down with the arena overhead. Hands-level flight only turns left/right and
   // eases back upright. A / X (PC: L) turns you right side up again in any mode.
   orientRig(inp, dt, live, thrust) {
     const q = this.rig.quaternion, start = q.clone();
-    if (inp.level && live) { this.levelT = 1.5; beep(520, 120, 0.06, 'triangle'); }
+    if (inp.level && live) { if (FLIP_FLIGHT) { this.levelT = 1.5; beep(520, 120, 0.06, 'triangle'); } else { this.snapTurn(180); beep(420, 90, 0.05, 'triangle'); } }
     const tilted = inp.rigUp.y < 0.9995;
     const engaged = live && (this.boosting || thrust.length() > 0.3);
     this.turnEase = (this.turnEase || 0) + ((engaged ? 1 : 0) - (this.turnEase || 0)) * (1 - Math.exp(-6 * dt));
-    if (tilted && (this.levelT > 0 || this.flight !== 'free') && live) {
+    if (tilted && (this.levelT > 0 || this.flight !== 'free' || !FLIP_FLIGHT) && live) {
       // Upright again, keeping the direction you're looking.
       const hl = this.headFwd.clone().applyQuaternion(start.clone().invert()), hw = this.headFwd;
       const localYaw = Math.hypot(hl.x, hl.z) > 0.2 ? Math.atan2(-hl.x, -hl.z) : 0;
@@ -1292,7 +1311,7 @@ AFRAME.registerComponent('surge-game', {
       // Capped turn speed (about 100°/s) so leveling out never whips you around.
       const ang = 2 * Math.acos(Math.min(1, Math.abs(q.dot(target))));
       this.turnAboutHead(() => q.rotateTowards(target, Math.min(LEVEL_MAX, ang * (this.levelT > 0 ? 3 : 2)) * dt));
-    } else if (this.handSteer && this.turnEase > 0.01 && this.flight !== 'head') {
+    } else if (FLIP_FLIGHT && this.handSteer && this.turnEase > 0.01 && this.flight !== 'head') {
       const qi = start.clone().invert(), a = this.steerDir.clone().applyQuaternion(qi);
       const hf = this.headFwd.clone().applyQuaternion(qi); hf.y = 0;
       if (hf.lengthSq() < 0.04) hf.set(0, 0, -1); hf.normalize();
@@ -1881,6 +1900,7 @@ AFRAME.registerComponent('surge-game', {
     if (playing > 2 && this.flight !== 'head') this.tip('steer');
     if (playing > 3) this.tip('boost2');
     if (playing > 14 && this.flight === 'free') this.tip('flip');
+    if (playing > 9 && this.inVR) this.tip('turn');
     if (d.holder === null && d.pos.distanceTo(this.headPos) < 6) this.tip('grab');
     if (d.holder === 'player') {
       this.tip(this.easy && this.inVR ? 'easyThrow' : 'throw');
@@ -1972,6 +1992,7 @@ AFRAME.registerComponent('surge-game', {
       const on = b.obj.visible; b.blob.visible = on;
       if (on) placeBlob(b.blob, b.pos, this.realm.id, 2.2);
       b.arm.rotation.x = b.punchT > 0 ? -1.5 * Math.sin((1 - b.punchT / 0.25) * Math.PI) : 0;
+      if (on) animateRider(b, dt, this.time, this.disc.pos);
       // A hit flashes the suit white; the respawn shield shimmers.
       b.hitT = Math.max(0, (b.hitT || 0) - dt * 4);
       const glow = Math.max(b.hitT, b.shieldT > 0 ? 0.25 + 0.2 * Math.sin(this.time * 12) : 0);
@@ -1991,7 +2012,7 @@ AFRAME.registerComponent('surge-game', {
     // Rider trails and glows (a bot's glow takes its power-up's color)
     for (const b of this.activeBots) {
       const buff = this.buffs.get(b), hc = buff ? buff.type.color : this.onFire === b.team ? '#ff8a1f' : b.col;
-      if (b.haloC !== hc) { b.haloC = hc; b.halo.material.color.set(hc); b.halo.scale.setScalar(hc === b.col ? 2.6 : 4); }
+      if (b.haloC !== hc) { b.haloC = hc; b.halo.material.color.set(hc); b.halo.scale.setScalar(hc === b.col ? 2.1 : 4); }
       const tp = b.trail.geometry.attributes.position;
       if ((b.trailT = (b.trailT || 0) + dt) > 0.05) {
         b.trailT = 0;

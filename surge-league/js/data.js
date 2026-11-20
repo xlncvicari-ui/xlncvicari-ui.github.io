@@ -16,8 +16,13 @@ const EASY_SPEED = 9, EASY_RESPONSE = 4;
 // past FREE_PITCH (up/down) or FREE_YAW (left/right of where you look). TURN_GAIN = turn speed per radian past that, TURN_MAX caps it.
 const BOOST_HOLD_COST = 30, STEER_LIFT = 12 * DEG, STEER_SMOOTH = 12;
 const FREE_PITCH = 45 * DEG, FREE_YAW = 50 * DEG, TURN_GAIN = 2.4, TURN_MAX = 2.2, LEVEL_MAX = 1.75;
-const FLIGHT_MODES = ['free', 'hands', 'head'];
-const FLIGHT_LABEL = { free: 'FLIGHT: FREE (HANDS STEER, FLIPS)', hands: 'FLIGHT: HANDS STEER, STAY LEVEL', head: 'FLIGHT: CLASSIC (GO WHERE YOU LOOK)' };
+// FLIP_FLIGHT: free flight with loops and flying upside down. Retired 2026-11-19 (it made seated players dizzy); the code stays
+// for a future flying game. With it off you always stay upright: hands steer, the right stick snap turns, A / X turns you around.
+const FLIP_FLIGHT = false;
+// The ride (not your view) banks a little into slides and snap turns and dips its nose when you speed up.
+const RIDE_TILT = 9 * DEG, RIDE_PITCH = 4 * DEG, SNAP_DEG = 30;
+const FLIGHT_MODES = FLIP_FLIGHT ? ['free', 'hands', 'head'] : ['hands', 'head'];
+const FLIGHT_LABEL = { free: 'FLIGHT: FREE (HANDS STEER, FLIPS)', hands: 'FLIGHT: HANDS STEER (ALWAYS UPRIGHT)', head: 'FLIGHT: CLASSIC (GO WHERE YOU LOOK)' };
 const ENERGY_MAX = 100, REGEN = 20, REGEN_DELAY = 0.6, PUSH_COST = 15;
 const BOUNCE_PLAYER = 0.5, BOUNCE_DISC = 0.8, BOUNCE_BOT = 0.3;
 const POCKET_R = 0.9, LAUNCH_GAIN = 1.6, LAUNCH_MAX = 22;
@@ -162,7 +167,7 @@ const DUNK_BONUS = 2, FIRE_BONUS = 1, FINAL_SURGE_AT = 30, TACKLE_SPEED = 7;
 
 // Which button each tip is about, so the pop-up shows the controller with that button lit.
 const TIP_HINTS = {
-  boost2: { side: 'right', part: 'stick' }, steer: { side: 'left', part: 'stick' }, flip: { side: 'right', part: 'a' }, grab: { side: 'right', part: 'grip' }, throw: { side: 'right', part: 'grip' },
+  boost2: { side: 'right', part: 'stick' }, steer: { side: 'left', part: 'stick' }, flip: { side: 'right', part: 'a' }, turn: { side: 'right', part: 'stick' }, grab: { side: 'right', part: 'grip' }, throw: { side: 'right', part: 'grip' },
   easyThrow: { side: 'right', part: 'trigger' }, pass: { side: 'left', part: 'trigger' }, steal: { side: 'right', part: 'grip' },
   pocket: { side: 'left', part: 'grip' }, pause: { side: 'left', part: 'y' }, power: { side: 'right', part: 'b' }
 };
@@ -174,6 +179,7 @@ const TIPS = {
   orb: ['Fly through the glowing orb to grab a power-up!', 'Fly through the glowing orb to grab a power-up!'],
   steer: ['Point your hands where you want to fly, then push the left stick forward.', ''],
   boost2: ['Push a thumbstick DOWN to boost. Keep it pushed to keep boosting.', 'Shift boosts. Hold it to keep boosting.'],
+  turn: ['Flick the right stick left or right to snap turn. A or X turns you all the way around.', 'L turns you all the way around.'],
   flip: ['Point both hands up and boost to loop over backwards. A or X turns you right side up.', 'Look up and boost to loop over. L turns you right side up.'],
   grab: ['Reach for the disc and grip. It snaps into your hand.', 'Look at the disc and hold G to pull it in.'],
   throw: ['Swing your arm and let go of grip to throw. Flick your wrist to curve it.', 'Space throws where you look. Hold A or D to curve.'],

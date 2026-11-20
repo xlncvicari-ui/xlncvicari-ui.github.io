@@ -4,7 +4,7 @@
 //   baked shadows from cover, hoops and rocks onto the floor (plus soft contact shadows), painted once per arena.
 // - Daytime skies get painted cumulus clouds; shiny surfaces reflect the realm's own sky.
 // - Floors get surface relief (normal maps made from their own patterns).
-// - Soft shadows under every rider and the disc, human riders with neon trim, a pool of spark bursts.
+// - Soft shadows under every rider and the disc, a pool of spark bursts. (Riders and rides: js/models.js.)
 // Nothing here adds lights or post passes; the floor shader change is a few lines in the floor's own material.
 
 // ------------------------------------------------------------------ filmic grade (tone curve)
@@ -87,25 +87,21 @@ function envFromSky(renderer, skyTex) {
 }
 
 // Surface relief: a normal map made from the floor pattern's own light and dark (seams and grooves sink in).
-const normalCache = {};
-function floorNormalMap(kind, colorTex) {
-  if (normalCache[kind]) return normalCache[kind];
-  const src = colorTex.image, w = src.width, h = src.height, data = src.getContext('2d').getImageData(0, 0, w, h).data;
-  const H = new Float32Array(w * h);
+// A relief map from a picture's own light and dark (seams and grooves sink in). k = how deep.
+function normalCanvas(src, k = 4) {
+  const w = src.width, h = src.height, data = src.getContext('2d').getImageData(0, 0, w, h).data, H = new Float32Array(w * h);
   for (let i = 0; i < w * h; i++) H[i] = (data[i * 4] * 0.3 + data[i * 4 + 1] * 0.59 + data[i * 4 + 2] * 0.11) / 255;
   const c = document.createElement('canvas'); c.width = w; c.height = h;
-  const g = c.getContext('2d'), out = g.createImageData(w, h), k = { grid: 3, plates: 5, cobble: 7, planks: 4, turf: 2.5 }[kind] || 4;
-  const at = (x, y) => H[((y + h) % h) * w + ((x + w) % w)];
+  const g = c.getContext('2d'), out = g.createImageData(w, h), at = (x, y) => H[((y + h) % h) * w + ((x + w) % w)];
   for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
     const dx = (at(x + 1, y) - at(x - 1, y)) * k, dy = (at(x, y + 1) - at(x, y - 1)) * k, len = Math.hypot(dx, dy, 1), o = (y * w + x) * 4;
     out.data[o] = (-dx / len * 0.5 + 0.5) * 255; out.data[o + 1] = (dy / len * 0.5 + 0.5) * 255; out.data[o + 2] = (1 / len * 0.5 + 0.5) * 255; out.data[o + 3] = 255;
   }
   g.putImageData(out, 0, 0);
-  const t = new T.CanvasTexture(c);
-  if ('colorSpace' in t) t.colorSpace = T.NoColorSpace;
-  t.wrapS = t.wrapT = T.RepeatWrapping; t.repeat.copy(colorTex.repeat); t.anisotropy = 8;
-  return (normalCache[kind] = t);
+  return c;
 }
+// Floors carry their own (baked) relief map: see floorTexture() in js/kit.js.
+function floorNormalMap(kind, colorTex) { return colorTex.userData.normal; }
 
 // ------------------------------------------------------------------ baked floor light (shadows, contact shadows, sun pools)
 // One 1024 x 1024 picture covers the whole field: red = sunlight reaching the floor (shadows dark), green = sky light
@@ -230,52 +226,7 @@ function placeBlob(m, pos, realmId, size) {
   m.visible = hgt < 34;
 }
 
-// ------------------------------------------------------------------ riders: a person in a glossy suit with neon trim
-// Built from a handful of shapes merged into three meshes (suit, neon trim, punching arm), so each rider stays cheap.
-// Faces +z (the way the rider looks).
-function buildRider(col) {
-  const suit = '#16181d', dark = '#0d0f13', grey = '#2a2e36';
-  const cap = (r, len, seg = 10) => new T.CapsuleGeometry(r, len, 4, seg);
-  const body = [
-    { geo: cap(0.17, 0.28, 12), pos: [0, 0.3, 0], color: suit },                       // torso
-    { geo: G.box(0.44, 0.12, 0.2), pos: [0, 0.46, 0], color: grey, rot: [0, 0, 0] },   // shoulders
-    { geo: cap(0.075, 0.26), pos: [-0.1, -0.02, 0.08], rot: [60, 0, 0], color: suit },  // thighs (crouched riding pose)
-    { geo: cap(0.075, 0.26), pos: [0.1, -0.02, 0.08], rot: [60, 0, 0], color: suit },
-    { geo: cap(0.065, 0.24), pos: [-0.1, -0.17, -0.02], rot: [-25, 0, 0], color: suit }, // shins
-    { geo: cap(0.065, 0.24), pos: [0.1, -0.17, -0.02], rot: [-25, 0, 0], color: suit },
-    { geo: G.box(0.11, 0.07, 0.24), pos: [-0.1, -0.31, 0.02], color: dark },            // boots
-    { geo: G.box(0.11, 0.07, 0.24), pos: [0.1, -0.31, 0.02], color: dark },
-    { geo: cap(0.06, 0.24), pos: [-0.26, 0.33, 0.06], rot: [-35, 0, 15], color: suit }, // left arm, forward on the grip
-    { geo: G.ball(0.07, 10, 8), pos: [-0.29, 0.2, 0.2], color: dark },                  // left glove
-    { geo: G.ball(0.165, 18, 14), pos: [0, 0.68, 0], color: '#1b1e24' },                // helmet
-    { geo: G.box(0.24, 0.3, 0.12), pos: [0, 0.32, -0.2], color: grey },                 // thruster pack
-    { geo: G.cyl(0.05, 0.12, 10), pos: [-0.07, 0.13, -0.22], color: dark },
-    { geo: G.cyl(0.05, 0.12, 10), pos: [0.07, 0.13, -0.22], color: dark }
-  ];
-  const neon = [
-    { geo: G.box(0.2, 0.05, 0.03), pos: [0, 0.69, 0.155], color: col },                // visor
-    { geo: G.torus(0.168, 0.012, 6, 28), pos: [0, 0.64, 0], rot: [90, 0, 0], color: col }, // helmet band
-    { geo: G.box(0.03, 0.3, 0.02), pos: [-0.09, 0.3, 0.165], color: col },              // chest stripes
-    { geo: G.box(0.03, 0.3, 0.02), pos: [0.09, 0.3, 0.165], color: col },
-    { geo: G.torus(0.068, 0.012, 6, 16), pos: [-0.27, 0.24, 0.15], rot: [55, 0, 0], color: col }, // cuff
-    { geo: G.torus(0.068, 0.012, 6, 16), pos: [-0.1, -0.12, 0.05], rot: [90, 0, 0], color: col }, // knee rings
-    { geo: G.torus(0.068, 0.012, 6, 16), pos: [0.1, -0.12, 0.05], rot: [90, 0, 0], color: col },
-    { geo: G.cyl(0.035, 0.02, 10), pos: [-0.07, 0.065, -0.22], color: '#ffffff' },     // thruster glow
-    { geo: G.cyl(0.035, 0.02, 10), pos: [0.07, 0.065, -0.22], color: '#ffffff' }
-  ];
-  const g = new T.Group(), suitMat = new T.MeshStandardMaterial({ vertexColors: true, metalness: 0.45, roughness: 0.32 });
-  g.add(new T.Mesh(mergeParts(body), suitMat));
-  const glow = new T.Mesh(mergeParts(neon), new T.MeshBasicMaterial({ vertexColors: true, toneMapped: false }));
-  g.add(glow);
-  // Right arm: its own mesh, pivoting at the shoulder, so it can throw a punch.
-  const arm = new T.Group(); arm.position.set(0.24, 0.45, 0);
-  arm.add(new T.Mesh(mergeParts([{ geo: cap(0.06, 0.28), pos: [0.02, -0.14, 0.06], rot: [-35, 0, -10], color: suit }, { geo: G.ball(0.075, 10, 8), pos: [0.05, -0.26, 0.17], color: dark },
-                                  { geo: G.torus(0.07, 0.012, 6, 16), pos: [0.04, -0.21, 0.13], rot: [55, 0, 0], color: col }]),
-                     suitMat));
-  g.add(arm);
-  g.position.y = 0.1;
-  return { group: g, arm, suitMat };
-}
+// Riders and rides are built in js/models.js.
 
 // ------------------------------------------------------------------ spark bursts (several at once)
 function makeBurstPool(scene, n = 4, count = 40) {
