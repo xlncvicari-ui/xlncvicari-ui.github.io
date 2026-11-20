@@ -31,6 +31,7 @@ AFRAME.registerComponent('surge-game', {
     this.flight = FLIGHT_MODES.includes(this.save.flight) ? this.save.flight : 'hands';
     this.level = LEVELS[Math.min(LEVELS.length - 1, this.save.level || 0)];
     this.menu = { row: 0, realm: 'shuffle', arena: 'frisbee', mode: 'hoops', ...this.save.menu };
+    if (this.menu.mode === 'shuffle') this.menu.mode = 'hoops'; // the mode is never shuffled any more
     this.stats = this.freshStats();
     this.snapArmed = true; this.pingT = 0; this.msg = ''; this.msgT = 0; this.time = 0; this.tipGap = 0;
     this.easy = false; this.modeLock = null; this.quietT = 0; this.weakThrows = 0; this.bigSwings = 0; this.swingCool = 0; this.activity = 1;
@@ -793,12 +794,12 @@ AFRAME.registerComponent('surge-game', {
   },
   updatePause(inp) {
     const panel = this.pausePanel;
-    const key = `${this.score.blue}:${this.score.orange}:${this.inVR}:${this.realm.id}:${this.arena.id}:${this.mode.id}:${this.easy}:${this.flight}`;
+    const key = `${this.score.blue}:${this.score.orange}:${this.inVR}:${this.realm.id}:${this.arena.id}:${this.mode.id}:${this.easy}:${this.flight}:${this.save.turnFollow}`;
     if (key !== this.pauseKey) {
       this.pauseKey = key;
       const model = { where: `${this.realm.name}  ·  ${this.arena.name}  ·  ${this.mode.name}`, blue: this.score.blue, orange: this.score.orange, inVR: this.inVR,
                       reach: this.inVR ? `ARMS: ${this.easy ? 'EASY REACH (point + trigger)' : 'FULL MOTION (swing to throw)'}` : 'ARMS: EASY REACH (PC)',
-                      flight: FLIGHT_LABEL[this.flight], exitLabel: window.SURGE_APP ? 'QUIT SURGE LEAGUE' : 'EXIT TO HOME SCREEN' };
+                      flight: FLIGHT_LABEL[this.flight], turn: this.save.turnFollow === false ? 'TURN: SNAP ONLY (RIGHT STICK)' : 'TURN: SNAP + FOLLOW YOUR HEAD', exitLabel: window.SURGE_APP ? 'QUIT SURGE LEAGUE' : 'EXIT TO HOME SCREEN' };
       panel.set((g, W, H, p) => paintPause(g, W, H, p, model));
     }
     panel.update();
@@ -812,6 +813,7 @@ AFRAME.registerComponent('surge-game', {
     if (pick.id === 'resume') this.closePause();
     else if (pick.id === 'help') this.openHelp();
     else if (pick.id === 'reach') { if (this.inVR) { this.modeLock = this.easy ? 'full' : 'easy'; this.setEasy(this.modeLock === 'easy', 'you chose it'); } }
+    else if (pick.id === 'turn') { this.save.turnFollow = this.save.turnFollow === false; writeSave(this.save); beep(640, 70, 0.06); }
     else if (pick.id === 'flight') {
       this.flight = FLIGHT_MODES[(FLIGHT_MODES.indexOf(this.flight) + 1) % FLIGHT_MODES.length];
       this.save.flight = this.flight; writeSave(this.save); beep(640, 70, 0.06);
@@ -850,7 +852,7 @@ AFRAME.registerComponent('surge-game', {
       }
       case 'arena': return btn.value === 'shuffle' ? 'A random arena every match.' : ARENAS.find(a => a.id === btn.value).blurb;
       case 'mode': { if (btn.value === 'shuffle') return 'A random mode every match (bots always on).'; const m = MODES.find(x => x.id === btn.value); return m.blurb + (m.ranked ? ' Ranked.' : ' Not ranked.'); }
-      case 'fullshuffle': return 'Shuffle everything: realm, arena, mode and bot level are a surprise every match. Starts right away.';
+      case 'fullshuffle': return 'Shuffle the realm, arena and bot level every match (the mode stays as you picked it). Starts right away.';
       case 'version': return VERSION_LINK.hint;
       case 'bots': if (btn.value === 'SHUFFLE') return 'Rookie, Pro or Legend bots, picked at random every match.'; return `Bot strength ${LEVELS.find(l => l.name === btn.value).rating}. Your rank moves more against stronger bots.`;
       case 'player-prev': case 'player-next': return `Switch player. ${p.name}: ${p.wins} wins, ${p.losses} losses, ${p.draws} draws.`;
@@ -880,8 +882,10 @@ AFRAME.registerComponent('surge-game', {
     else if (btn.id === 'mode') { this.menu.mode = v; if (v !== 'shuffle' && this.mode.id !== v) { this.mode = MODES.find(m => m.id === v); this.buildArena(); this.newMatch(); } }
     else if (btn.id === 'bots') { this.menu.bots = v === 'SHUFFLE' ? 'shuffle' : v; if (v !== 'SHUFFLE') { this.level = LEVELS.find(l => l.name === v); this.save.level = LEVELS.indexOf(this.level); } }
     else if (btn.id === 'fullshuffle') {
-      Object.assign(this.menu, { realm: 'shuffle', arena: 'shuffle', mode: 'shuffle', bots: 'shuffle' }); this.shuffleNext = null;
-      this.flash('FULL SHUFFLE: realm, arena, mode and bots are a surprise every match.', 2.5); this.enterPortal(); return;
+      // Realm, arena and bots are a surprise; the mode stays what you picked (never Trick Practice by accident).
+      Object.assign(this.menu, { realm: 'shuffle', arena: 'shuffle', bots: 'shuffle' }); this.shuffleNext = null;
+      if (!this.mode.bots) { this.mode = MODES.find(m => m.id === 'hoops'); this.menu.mode = 'hoops'; }
+      this.flash(`FULL SHUFFLE: realm, arena and bots are a surprise every match. Mode: ${this.mode.name}.`, 2.5); this.enterPortal(); return;
     }
     else if (btn.id === 'player-prev' || btn.id === 'player-next') {
       const list = this.save.profiles, i = list.findIndex(x => x.id === this.save.active);
@@ -909,7 +913,8 @@ AFRAME.registerComponent('surge-game', {
     if (hover) { this.focus.row = hover.btn.row; this.focus.col = hover.btn.col; }
     const moved = this.stickNav(inp, panel, this.focus);
     // Moving the stick along a row of choices picks them right away (like before); A then enters the dream.
-    if (moved && ['realm', 'arena', 'mode', 'bots'].includes(moved.id) && inp.menuX) this.menuAction(moved);
+    // (the MODE row only moves the highlight: picking a mode takes A or the trigger, so nobody scrolls into Trick Practice)
+    if (moved && ['realm', 'arena', 'bots'].includes(moved.id) && inp.menuX) this.menuAction(moved);
     const focused = panel.buttons.find(b => b.row === this.focus.row && b.col === this.focus.col);
     const shown = hover ? hover.btn : focused;
     panel.highlight(shown, '#66ffff');
@@ -967,6 +972,18 @@ AFRAME.registerComponent('surge-game', {
       this.startBurst(o.pos, o.type.color);
       this.el.object3D.remove(o.obj); this.orbs.splice(this.orbs.indexOf(o), 1);
       break;
+    }
+    // Grab one with a hand (grip or trigger close to it), or hit it with a throw: whoever threw the disc gets it.
+    const d = this.disc;
+    for (const o of [...this.orbs]) {
+      let who = null, how = '';
+      for (const h of this.hands || []) if ((h.grip || h.trigger) && h.glove.distanceTo(o.pos) < ORB_GRAB_R && !(this.playerOut > 0)) { who = 'player'; how = 'GRABBED'; }
+      if (!who && d.holder === null && d.lastThrower && d.away <= 0 && d.pos.distanceTo(o.pos) < ORB_HIT_R) { who = d.lastThrower; how = 'SHOT IT'; }
+      if (!who || (who !== 'player' && !this.activeBots.includes(who))) continue;
+      this.grantBuff(who, o.type);
+      if (who === 'player') this.flash(`${how}: ${o.type.name}!\n${o.type.hint}`, 2.6, { big: true, color: o.type.color });
+      this.startBurst(o.pos, o.type.color);
+      this.el.object3D.remove(o.obj); this.orbs.splice(this.orbs.indexOf(o), 1);
     }
   },
   grantBuff(who, type) {
@@ -1113,6 +1130,8 @@ AFRAME.registerComponent('surge-game', {
   updateArena(dt) {
     const wild = !!(this.surge && this.surge.ev.id === 'wild');
     for (const r of this.rocks) if (r.update) r.update(dt, this.time);
+    for (const r of this.rocks) { if (!r.prev) { r.prev = r.c.clone(); r.vel = new T.Vector3(); } r.vel.subVectors(r.c, r.prev).divideScalar(Math.max(dt, 1e-3)); r.prev.copy(r.c); }
+    if (this.live) this.hazardHits(dt);
     for (const u of this.styleUpdates) u(dt, this.time);
     this.hazard.update(dt, this.time, wild, this);
     if (this.live) {
@@ -1143,6 +1162,35 @@ AFRAME.registerComponent('surge-game', {
     }
   },
 
+  // Wrecking balls (Iron Foundry), crystals, rune stones and the rest of the things floating in the arena hit whoever they touch:
+  // a knock away from them (plus their own swing), a short stun, and damage. Your head and your body (ride) both count.
+  hazardHits(dt) {
+    const heavy = this.realm.id === 'foundry';
+    for (const r of this.rocks) {
+      if (r.ob.type !== 'ball') continue;
+      r.hitCool = r.hitCool || new Map();
+      const reach = r.r * (heavy ? 1.45 : 1.05);
+      for (const a of this.agents()) {
+        if ((r.hitCool.get(a) || 0) > this.time) continue;
+        const pts = a === 'player' ? [this.headPos, this.headPos.clone().addScaledVector(UP.clone().applyQuaternion(this.rig.quaternion), -1.0)] : [a.pos];
+        const hit = pts.find(p => p.distanceTo(r.c) < reach + (a === 'player' ? 0.55 : BOT_R));
+        if (!hit) continue;
+        r.hitCool.set(a, this.time + 0.8);
+        const n = hit.clone().sub(r.c); if (n.lengthSq() < 1e-4) n.set(0, 1, 0); n.normalize();
+        const push = n.multiplyScalar(heavy ? 10 : 6).addScaledVector(r.vel, 0.6);
+        if (a === 'player') {
+          this.damage('player', heavy ? 22 : 8, null, push, heavy ? 'wrecking ball' : 'rock');
+          this.impactFlash = 1; this.flash(heavy ? 'WRECKING BALL!' : 'BONK!', 1, { color: '#ff8a1f' });
+          for (const h of this.hands || []) pulse(h, 1, 160);
+        } else {
+          this.damage(a, heavy ? 22 : 8, null, push, heavy ? 'wrecking ball' : 'rock');
+        }
+        beepAt(heavy ? 90 : 160, 220, 0.14, 'square', r.c); noiseAt(200, 0.12, r.c, [1400, 200]);
+        this.startBurst(hit, heavy ? '#ff8a1f' : '#ffffff');
+      }
+    }
+  },
+
   // ---------------------------------------------------------------- player movement
   movePlayer(inp, dt, live) {
     if (this.playerOut > 0) { this.boosting = false; this.thrustLevel = 0; return; }
@@ -1150,6 +1198,7 @@ AFRAME.registerComponent('surge-game', {
       if (Math.abs(inp.turnX) > 0.7 && Math.abs(inp.climb) < 0.5 && this.snapArmed) { this.snapTurn(inp.turnX > 0 ? -SNAP_DEG : SNAP_DEG); this.snapArmed = false; }
       if (Math.abs(inp.turnX) < 0.3) this.snapArmed = true;
     }
+    this.followHead(inp, dt, live);
     const d = this.disc, anchored = [];
     for (const h of inp.hands) {
       if (h.desktop) continue;
@@ -1238,6 +1287,23 @@ AFRAME.registerComponent('surge-game', {
     this.impactFlash = Math.max(0, this.impactFlash - dt * 2);
     this.energyIdle += dt;
     if (this.energyIdle > REGEN_DELAY) this.energy = Math.min(ENERGY_MAX, this.energy + REGEN * dt);
+  },
+
+  // Follow your head (try-out, 2026-11-19): look well to one side and your ride drifts round that way, faster while you fly,
+  // easing in over half a second. Look back toward the front to stop. Snap turns still work. Off in the pause menu (TURN row).
+  followHead(inp, dt, live) {
+    this.followRate = 0;
+    if (!inp.inVR || !live || this.save.turnFollow === false || this.playerOut > 0) { this.followEase = 0; return; }
+    const f = this.headFwd.clone().applyQuaternion(this.rig.quaternion.clone().invert()); f.y = 0;
+    if (f.lengthSq() < 0.04) return;
+    const yaw = Math.atan2(-f.x, -f.z), past = Math.abs(yaw) - FOLLOW_START;
+    if (past <= 0) { this.followEase = 0; return; }
+    this.followEase = Math.min(1, (this.followEase || 0) + dt * 2);
+    const moving = Math.min(1, this.vel.length() / 4);
+    const rate = Math.sign(yaw) * Math.min(FOLLOW_MAX, past * FOLLOW_GAIN) * (0.35 + 0.65 * moving) * this.followEase;
+    this.turnAboutHead(() => this.rig.rotateY(rate * dt));
+    if (this.steerDir) this.steerDir.applyAxisAngle(UP, rate * dt);
+    this.followRate = Math.abs(rate);
   },
 
   // Snap turns: the right stick turns you SNAP_DEG at once, A / X (PC: L) turns you all the way around behind a quick blink.
@@ -1772,8 +1838,17 @@ AFRAME.registerComponent('surge-game', {
       if (resolveSphere(b.pos, b.vel, BOT_R, BOUNCE_BOT, this.obstacles) > 0.5) b.vel.add(new T.Vector3(Math.random() - 0.5, Math.random() - 0.5, Math.random() - 0.5).multiplyScalar(6));
       if (b.vel.lengthSq() > 0.25) b.facing.copy(b.vel).normalize();
 
+      if (chaser[b.team] !== b) b.pullT = 0;
       const catchR = (d.passTo === b ? BOT_CATCH_R + 1 : BOT_CATCH_R) * (this.mittOn(b) || this.buffIs(b, 'magnet') ? 2.5 : 1);
-      if (d.holder === null && d.away <= 0 && b.cool === 0 && b.stun === 0 && b.pos.distanceTo(d.pos) < catchR + DISC_R) { this.botTakes(b); beep(330, 100, 0.08); }
+      if (d.holder === null && d.away <= 0 && b.cool === 0 && b.stun === 0 && b.pos.distanceTo(d.pos) < catchR + DISC_R) { this.botTakes(b); beep(330, 100, 0.08); b.pullT = 0; }
+      else if (d.holder === null && d.away <= 0 && chaser[b.team] === b && b.cool === 0 && b.stun === 0 && d.noCatch === 0 && !d.passTo) {
+        // The team's chaser pulls a loose disc in from as far as you can (your pull range, or arm's reach in full-motion mode).
+        const range = this.easy ? EASY_PULL_RANGE : SNAP_R + ARM_MAX;
+        if (b.pos.distanceTo(d.pos) < range) {
+          b.pullT = (b.pullT || 0) + dt;
+          if (b.pullT > (BOT_PULL_DELAY[this.level.name] || 0.5)) { d.vel.lerp(tmp.subVectors(b.pos, d.pos).setLength(PULL_SPEED), 1 - Math.exp(-8 * dt)); d.botPull = b; d.botPullT = this.time; }
+        } else b.pullT = 0;
+      }
       else if (d.holder && d.holder !== b && this.teamOf(d.holder) !== b.team && b.stun === 0) {
         const graceOk = d.holder === 'player' ? this.playerGrace === 0 : !(d.holder.grace > 0);
         if (graceOk && !this.buffIs(d.holder, 'shield') && b.pos.distanceTo(this.posOf(d.holder)) < STEAL_R * this.level.steal && this.fromFrontOrSide(d.holder, b.pos)) {
@@ -2123,7 +2198,7 @@ AFRAME.registerComponent('surge-game', {
       this.vigMat = v.material;
     }
     // Darker edges when you speed up, hit something, or your ride is turning (loops and rolls), which keeps flips comfortable.
-    const target = Math.min(0.85, this.accelMag / 30 + Math.max(0, this.vel.length() - 14) / 14 + this.impactFlash * 0.8 + Math.max(0, (this.turnRate || 0) - 0.3) * 0.35 * (this.save.comfort === false ? 0 : 1));
+    const target = Math.min(0.85, this.accelMag / 30 + Math.max(0, this.vel.length() - 14) / 14 + this.impactFlash * 0.8 + Math.max(0, (this.turnRate || 0) - 0.3) * 0.35 * (this.save.comfort === false ? 0 : 1) + Math.max(0, (this.followRate || 0) - 0.15) * 0.6);
     this.vig += (target - this.vig) * (1 - Math.exp(-8 * dt));
     this.vigMat.opacity = this.vig;
   },

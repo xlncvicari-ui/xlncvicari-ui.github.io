@@ -238,6 +238,11 @@ const TEAMAI = {
     if (d.holder || d.noCatch > 0 || b.cool > 0 || b.stun > 0) return;
     const dist = b.pos.distanceTo(d.pos);
     if (d.passTo === b && dist < 2.2) return this.takeBall(b);
+    // The nearest chaser pulls a loose CORE in from your pull range (point + trigger), after a short reaction time.
+    if (b.role === 'chase' && b.slot === 0 && !d.passTo && dist < (this.easy ? EASY_PULL_RANGE : SNAP_R + ARM_MAX) && clearLine(b.pos, d.pos, BALL_R)) {
+      b.pullT = (b.pullT || 0) + 1 / 60; // called once a frame
+      if (b.pullT > (BOT_PULL_DELAY[this.level.name] || 0.5)) d.vel.lerp(tmp.subVectors(b.pos, d.pos).add(new T.Vector3(0, 1, 0)).setLength(PULL_SPEED), 0.12);
+    } else b.pullT = 0;
     if (dist < BOT_CATCH_R + BALL_R) {
       // Fast loose balls are hard to catch; your own team's passes to someone else are left alone.
       if (d.passTo && this.teamOf(d.passTo) === b.team) return;

@@ -278,6 +278,7 @@ AFRAME.registerComponent('surge-game', {
       if (Math.abs(inp.turnX) > 0.7 && Math.abs(inp.climb) < 0.5 && this.snapArmed) { this.snapTurn(inp.turnX > 0 ? -SNAP_DEG : SNAP_DEG); this.snapArmed = false; }
       if (Math.abs(inp.turnX) < 0.3) this.snapArmed = true;
     }
+    this.followHead(inp, dt, live);
     if (inp.level && (live || this.state === 'penalty' || this.state === 'countdown')) { this.snapTurn(180); beep(420, 90, 0.05, 'triangle'); }
     const prevVel = this.vel.clone();
     this.boostCool = Math.max(0, this.boostCool - dt); this.boostT = Math.max(0, this.boostT - dt);
@@ -324,6 +325,20 @@ AFRAME.registerComponent('surge-game', {
     this.impactFlash = Math.max(0, this.impactFlash - dt * 2);
     this.energyIdle += dt;
     if (this.energyIdle > REGEN_DELAY) this.energy = Math.min(ENERGY_MAX, this.energy + REGEN * dt);
+  },
+  // Follow your head: look well to one side and you drift round that way (faster while you fly). Snap turns still work.
+  followHead(inp, dt, live) {
+    this.followRate = 0;
+    if (!inp.inVR || !live || this.save.turnFollow === false) { this.followEase = 0; return; }
+    const f = this.headFwd.clone().applyQuaternion(this.rig.quaternion.clone().invert()); f.y = 0;
+    if (f.lengthSq() < 0.04) return;
+    const yaw = Math.atan2(-f.x, -f.z), past = Math.abs(yaw) - FOLLOW_START;
+    if (past <= 0) { this.followEase = 0; return; }
+    this.followEase = Math.min(1, (this.followEase || 0) + dt * 2);
+    const rate = Math.sign(yaw) * Math.min(FOLLOW_MAX, past * FOLLOW_GAIN) * (0.35 + 0.65 * Math.min(1, this.vel.length() / 4)) * this.followEase;
+    this.turnAboutHead(() => this.rig.rotateY(rate * dt));
+    if (this.steerDir) this.steerDir.applyAxisAngle(UP, rate * dt);
+    this.followRate = Math.abs(rate);
   },
   snapTurn(deg) {
     this.turnAboutHead(() => this.rig.rotateY(deg * DEG));
@@ -919,12 +934,12 @@ AFRAME.registerComponent('surge-game', {
   },
   closePause(quiet) { this.pauseOpen = false; this.placeMenu(false); if (!quiet) beep(700, 80, 0.08); },
   updatePause(inp) {
-    const panel = this.pausePanel, key = `${this.score.blue}:${this.score.orange}:${this.inVR}:${this.easy}:${this.flight}:${this.state}`;
+    const panel = this.pausePanel, key = `${this.score.blue}:${this.score.orange}:${this.inVR}:${this.easy}:${this.flight}:${this.state}:${this.save.turnFollow}`;
     if (key !== this.pauseKey) {
       this.pauseKey = key;
       const model = { blue: this.score.blue, orange: this.score.orange, inVR: this.inVR, training: this.state === 'training',
                       reach: this.inVR ? `ARMS: ${this.easy ? 'EASY REACH (point + trigger)' : 'FULL MOTION (swing to throw)'}` : 'ARMS: EASY REACH (PC)',
-                      flight: FLIGHT_LABEL[this.flight], exitLabel: window.SURGE_APP ? 'QUIT SURGE LEAGUE' : 'EXIT TO HOME SCREEN', versionLabel: `PLAY ${VERSION_LINK.label}` };
+                      flight: FLIGHT_LABEL[this.flight], turn: this.save.turnFollow === false ? 'TURN: SNAP ONLY (RIGHT STICK)' : 'TURN: SNAP + FOLLOW YOUR HEAD', exitLabel: window.SURGE_APP ? 'QUIT SURGE LEAGUE' : 'EXIT TO HOME SCREEN', versionLabel: `PLAY ${VERSION_LINK.label}` };
       panel.set((g, W, H, p) => paintPause4(g, W, H, p, model));
     }
     panel.update();
@@ -938,6 +953,7 @@ AFRAME.registerComponent('surge-game', {
     if (pick.id === 'resume') this.closePause();
     else if (pick.id === 'help') this.openHelp();
     else if (pick.id === 'reach') { if (this.inVR) { this.easy = !this.easy; this.save.reach = this.easy ? 'easy' : 'full'; writeSave(this.save); beep(640, 70, 0.06); } }
+    else if (pick.id === 'turn') { this.save.turnFollow = this.save.turnFollow === false; writeSave(this.save); beep(640, 70, 0.06); }
     else if (pick.id === 'flight') { this.flight = FLIGHT_MODES[(FLIGHT_MODES.indexOf(this.flight) + 1) % FLIGHT_MODES.length]; this.save.flight = this.flight; writeSave(this.save); beep(640, 70, 0.06); }
     else if (pick.id === 'restart') { this.closePause(true); if (this.state === 'training') this.startTraining(); else this.newMatch(); }
     else if (pick.id === 'menu') { this.closePause(true); this.resetToMenu(); this.helpOpen = false; }
@@ -1081,7 +1097,7 @@ AFRAME.registerComponent('surge-game', {
   },
   updateComfort(dt) {
     if (!this.vigMat) { const v = this.$('vignette').getObject3D('mesh'); if (!v) return; v.material.map = vignetteTexture(); v.material.needsUpdate = true; v.renderOrder = 999; this.vigMat = v.material; }
-    const target = Math.min(0.85, this.accelMag / 30 + Math.max(0, this.vel.length() - 12) / 12 + this.impactFlash * 0.8);
+    const target = Math.min(0.85, this.accelMag / 30 + Math.max(0, this.vel.length() - 12) / 12 + this.impactFlash * 0.8 + Math.max(0, (this.followRate || 0) - 0.15) * 0.6);
     this.vig += (target - this.vig) * (1 - Math.exp(-8 * dt));
     this.vigMat.opacity = this.vig;
   },

@@ -229,7 +229,7 @@ function paintBriefing(g, W, H, panel, m) {
 }
 
 // ------------------------------------------------------------------ pause
-const PAUSE4_W = 1.15, PAUSE4_H = 1.48;
+const PAUSE4_W = 1.15, PAUSE4_H = 1.6;
 function paintPause4(g, W, H, panel, m) {
   cardBg(g, W, H);
   g.textAlign = 'center'; g.textBaseline = 'middle';
@@ -238,7 +238,7 @@ function paintPause4(g, W, H, panel, m) {
   if (m.training) { g.fillStyle = GOLD; g.fillText('TRAINING', W / 2, 150); }
   else { g.fillStyle = TEAM_COLOR.blue; g.textAlign = 'right'; g.fillText(`BLUE ${m.blue}`, W / 2 - 24, 150); g.fillStyle = DIM; g.textAlign = 'center'; g.fillText(':', W / 2, 148);
          g.fillStyle = TEAM_COLOR.orange; g.textAlign = 'left'; g.fillText(`${m.orange} ORANGE`, W / 2 + 24, 150); }
-  const items = [['resume', 'RESUME', CYAN], ['help', 'HOW TO PLAY', '#7a8aa0'], ['reach', m.reach, '#7a8aa0'], ['flight', m.flight, '#7a8aa0'],
+  const items = [['resume', 'RESUME', CYAN], ['help', 'HOW TO PLAY', '#7a8aa0'], ['reach', m.reach, '#7a8aa0'], ['flight', m.flight, '#7a8aa0'], ['turn', m.turn, '#7a8aa0'],
                  ['restart', m.training ? 'RESTART TRAINING' : 'RESTART MATCH', '#7a8aa0'], ['menu', 'MAIN MENU', '#7a8aa0'], ['version', m.versionLabel, '#7a8aa0'], ['home', m.exitLabel, '#c0605a']];
   items.forEach(([id, label, color], i) => tile(g, panel, { id, x: 60, y: 200 + i * 112, w: W - 120, h: 96, row: i, col: 0 }, color, label, null, i === 0));
   g.fillStyle = DIM; g.font = uiFont(22, 600); g.textAlign = 'center';

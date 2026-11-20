@@ -20,6 +20,10 @@ const EASY_SPEED = 8.5, EASY_RESPONSE = 4;
 const STEER_LIFT = 12 * DEG, STEER_SMOOTH = 12;
 const RIDE_TILT = 9 * DEG, RIDE_PITCH = 4 * DEG, SNAP_DEG = 30;
 const FLIGHT_MODES = ['hands', 'head'];
+// Follow your head (pause menu TURN row): look past FOLLOW_START to one side and you drift round that way, up to FOLLOW_MAX per second.
+const FOLLOW_START = 35 * DEG, FOLLOW_GAIN = 1.2, FOLLOW_MAX = 45 * DEG;
+// Bots pull a loose CORE in from your pull range after this reaction time.
+const BOT_PULL_DELAY = { ROOKIE: 0.8, PRO: 0.5, LEGEND: 0.3 };
 const FLIGHT_LABEL = { hands: 'FLIGHT: HANDS STEER (ALWAYS UPRIGHT)', head: 'FLIGHT: CLASSIC (GO WHERE YOU LOOK)' };
 const ENERGY_MAX = 100, REGEN = 20, REGEN_DELAY = 0.6;
 const BOUNCE_WALL = 0.35, BOUNCE_BALL = 0.75;
@@ -28,7 +32,7 @@ const ARM_START = 0.32, ARM_GAIN = 10, ARM_MAX = 2.4;
 // ------------------------------------------------------------------ the core (ball)
 const THROW_GAIN = 1.3, BALL_MAX = 34, BALL_DRAG = 0.12;
 const GRAB_R = 0.6, SNAP_R = 1.8, SNAP_SPEED = 30;
-const EASY_PULL_RANGE = 30, PULL_SPEED = 18, EASY_THROW = 26;
+const EASY_PULL_RANGE = 27, PULL_SPEED = 18, EASY_THROW = 26;
 const THROW_ASSIST = 5 * DEG, EASY_ASSIST = 8 * DEG;
 const PASS_SPEED = 24, PASS_ANGLE = 18 * DEG, PASS_RANGE = 50;
 const STEAL_R = 1.7, GRACE = 0.8;              // grab the core straight out of a rival's hands within STEAL_R (not in their first GRACE s)

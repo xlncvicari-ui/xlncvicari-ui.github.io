@@ -23,6 +23,13 @@ const FREE_PITCH = 45 * DEG, FREE_YAW = 50 * DEG, TURN_GAIN = 2.4, TURN_MAX = 2.
 const FLIP_FLIGHT = false;
 // The ride (not your view) banks a little into slides and snap turns and dips its nose when you speed up.
 const RIDE_TILT = 9 * DEG, RIDE_PITCH = 4 * DEG, SNAP_DEG = 30;
+// Follow your head: look more than FOLLOW_START to one side and your ride slowly turns that way (up to FOLLOW_MAX per second;
+// FOLLOW_GAIN = turn speed per radian past the start). Snap turns still work. Pause menu: TURN row.
+const FOLLOW_START = 35 * DEG, FOLLOW_GAIN = 1.2, FOLLOW_MAX = 45 * DEG;
+// Power-up orbs: grab one with a hand this close, or hit it with a throw (the thrower gets it).
+const ORB_GRAB_R = 1.5, ORB_HIT_R = 1.3;
+// How long the nearest bot waits before pulling a loose disc in from range, by level.
+const BOT_PULL_DELAY = { ROOKIE: 0.8, PRO: 0.5, LEGEND: 0.3 };
 const FLIGHT_MODES = FLIP_FLIGHT ? ['free', 'hands', 'head'] : ['hands', 'head'];
 const FLIGHT_LABEL = { free: 'FLIGHT: FREE (HANDS STEER, FLIPS)', hands: 'FLIGHT: HANDS STEER (ALWAYS UPRIGHT)', head: 'FLIGHT: CLASSIC (GO WHERE YOU LOOK)' };
 const ENERGY_MAX = 100, REGEN = 20, REGEN_DELAY = 0.6, PUSH_COST = 15;
@@ -31,7 +38,8 @@ const POCKET_R = 0.9, LAUNCH_GAIN = 1.6, LAUNCH_MAX = 22;
 const ARM_START = 0.32, ARM_GAIN = 10, ARM_MAX = 2.4;
 const THROW_GAIN = 1.3, DISC_MAX = 40, DISC_DRAG = 0.15;
 const GRAB_R = 0.6, SNAP_R = 1.8, SNAP_SPEED = 30;
-const EASY_PULL_RANGE = 35, PULL_SPEED = 18, EASY_THROW = 26, PUSH_RANGE = 12, PUSH_POWER = 16;
+// Pull range for the disc (point + trigger): 10% shorter since 2026-11-19, and bots pull from the same range.
+const EASY_PULL_RANGE = 31.5, PULL_SPEED = 18, EASY_THROW = 26, PUSH_RANGE = 12, PUSH_POWER = 16;
 const THROW_ASSIST = 5 * DEG, EASY_ASSIST = 8 * DEG;
 const HOLD_LIMIT = 8, PASS_SPEED = 22, PASS_ANGLE = 15 * DEG, PASS_RANGE = 45;
 const CURVE_K = 1.5, CURVE_MAX = 14, CURVE_DECAY = 1.2;

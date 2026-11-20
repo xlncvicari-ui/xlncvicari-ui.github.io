@@ -402,8 +402,8 @@ function paintStartMenu(g, W, H, panel, m) {
     g.textAlign = 'center'; g.fillStyle = ink; fitFont(g, a.name, b.w - 30, 32, 800); g.fillText(a.name, b.x + b.w / 2, b.y + 34);
     g.fillStyle = dim; fitFont(g, a.short, b.w - 30, 21, 600); g.fillText(a.short, b.x + b.w / 2, b.y + 68);
   }));
-  rowLabel('MODE', 582);
-  const modeTiles = [...MODES, { ...SHUF, short: 'a different mode every match' }], mw = (W - P * 2 - (modeTiles.length - 1) * 16) / modeTiles.length;
+  rowLabel('MODE', 582); // no shuffle tile for the mode: you always know if it's a match or practice
+  const modeTiles = [...MODES], mw = (W - P * 2 - (modeTiles.length - 1) * 16) / modeTiles.length;
   modeTiles.forEach((md, i) => tile({ id: 'mode', value: md.id, x: P + i * (mw + 16), y: 600, w: mw, h: 92, row: 3, col: i }, m.modeId === md.id, b => {
     g.textAlign = 'center'; g.fillStyle = ink; fitFont(g, md.name, b.w - 24, 30, 800); g.fillText(md.name, b.x + b.w / 2, b.y + 34);
     g.fillStyle = dim; fitFont(g, md.short, b.w - 24, 20, 600); g.fillText(md.short, b.x + b.w / 2, b.y + 68);
@@ -442,7 +442,7 @@ function paintStartMenu(g, W, H, panel, m) {
 }
 
 // ------------------------------------------------------------------ pause menu
-const PAUSE_W = 1.15, PAUSE_H = 1.48;
+const PAUSE_W = 1.15, PAUSE_H = 1.6;
 function paintPause(g, W, H, panel, m) {
   const ink = '#eaf4ff', dim = '#8fa8c4';
   g.fillStyle = 'rgba(8,16,32,0.95)'; rrect(g, 0, 0, W, H, 36); g.fill();
@@ -454,7 +454,7 @@ function paintPause(g, W, H, panel, m) {
   g.fillStyle = '#3d8bff'; g.textAlign = 'right'; g.fillText(`BLUE ${m.blue}`, W / 2 - 24, 176);
   g.fillStyle = dim; g.textAlign = 'center'; g.fillText(':', W / 2, 174);
   g.fillStyle = '#ff7a2f'; g.textAlign = 'left'; g.fillText(`${m.orange} ORANGE`, W / 2 + 24, 176);
-  const items = [['resume', 'RESUME', '#66ffff'], ['help', 'HOW TO PLAY (CONTROLS)', '#7a8aa0'], ['reach', m.reach, '#7a8aa0'], ['flight', m.flight, '#7a8aa0'],
+  const items = [['resume', 'RESUME', '#66ffff'], ['help', 'HOW TO PLAY (CONTROLS)', '#7a8aa0'], ['reach', m.reach, '#7a8aa0'], ['flight', m.flight, '#7a8aa0'], ['turn', m.turn, '#7a8aa0'],
                  ['restart', 'RESTART MATCH', '#7a8aa0'], ['menu', 'CHANGE REALM, ARENA OR MODE', '#7a8aa0'],
                  ['v1', 'PLAY VERSION 1 (CLASSIC)', '#7a8aa0'], ['home', m.exitLabel || 'EXIT TO HOME SCREEN', '#c0605a']];
   items.forEach(([id, label, color], i) => {
