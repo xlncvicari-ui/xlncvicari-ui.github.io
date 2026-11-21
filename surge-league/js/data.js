@@ -37,7 +37,7 @@ const ARM_START = 0.32, ARM_GAIN = 10, ARM_MAX = 2.4;
 const THROW_GAIN = 1.3, DISC_MAX = 40, DISC_DRAG = 0.15;
 const GRAB_R = 0.6, SNAP_R = 1.8, SNAP_SPEED = 30;
 // Pull range for the disc (point + trigger): 10% shorter since 2026-11-19, and bots pull from the same range.
-const EASY_PULL_RANGE = 31.5, PULL_SPEED = 18, EASY_THROW = 26, PUSH_RANGE = 12, PUSH_POWER = 16;
+const EASY_PULL_RANGE = 25, PULL_SPEED = 18, EASY_THROW = 26, PUSH_RANGE = 12, PUSH_POWER = 16;
 const THROW_ASSIST = 5 * DEG, EASY_ASSIST = 8 * DEG;
 const HOLD_LIMIT = 8, PASS_SPEED = 22, PASS_ANGLE = 15 * DEG, PASS_RANGE = 45;
 const CURVE_K = 1.5, CURVE_MAX = 14, CURVE_DECAY = 1.2;

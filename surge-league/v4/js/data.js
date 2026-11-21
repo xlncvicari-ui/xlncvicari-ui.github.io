@@ -32,7 +32,7 @@ const ARM_START = 0.32, ARM_GAIN = 10, ARM_MAX = 2.4;
 // ------------------------------------------------------------------ the core (ball)
 const THROW_GAIN = 1.3, BALL_MAX = 34, BALL_DRAG = 0.12;
 const GRAB_R = 0.6, SNAP_R = 1.8, SNAP_SPEED = 30;
-const EASY_PULL_RANGE = 27, PULL_SPEED = 18, EASY_THROW = 26;
+const EASY_PULL_RANGE = 21.5, PULL_SPEED = 18, EASY_THROW = 26;
 const THROW_ASSIST = 5 * DEG, EASY_ASSIST = 8 * DEG;
 const PASS_SPEED = 24, PASS_ANGLE = 18 * DEG, PASS_RANGE = 50;
 const STEAL_R = 1.7, GRACE = 0.8;              // grab the core straight out of a rival's hands within STEAL_R (not in their first GRACE s)
