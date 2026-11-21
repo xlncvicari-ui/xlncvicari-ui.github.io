@@ -1,10 +1,18 @@
 // Version 5 level engine. A level (js/levels.js) is a list of box-shaped ROOMS. From that this file works out everything else:
 // - WALLS: every face of every room becomes wall slabs, minus DOORWAYS (wherever two rooms touch), minus open WINDOWS.
 //   Walls are real solids, so the space outside the rooms is flyable: go out a window, come back in anywhere.
-// - 'field' walls are see-through energy lattice (solid, but you can watch through them); 'hull' walls are opaque panels.
-// - COLLISION for riders and the core against those slabs (a grid makes it fast), an outer boundary, and line-of-sight checks.
+// - 'field' walls are see-through (solid, but you can watch through them); 'hull' walls are opaque.
+// - COLLISION for riders and the core against all of it (a grid makes it fast), an outer boundary, and line-of-sight checks.
 // - a ROUTE GRAPH for the bots (room points, doorways, windows, and points out in space), so any level works without hand-made paths.
-// - the MESHES: a handful of merged meshes per level (hull, floors, lattice, light strips, decals, goals).
+// The meshes are built in js/worldmesh.js.
+//
+// Added 2026-11-21 so levels stop looking like boxes:
+// - COVES: the edges where two walls of a room meet are rounded (kind recipe `r`, or room `cove`), with matching collision.
+//   A cove can also be a few flat facets (`profile`), which is how the Endless Chasm gets twelve sides out of a square room.
+// - ROUNDED OPENINGS: windows and doorways get rounded corners (small solid corner pieces keep you out of them).
+// - ORBS: round floating rocks (level.orbs). MOVERS: moving platforms, flat twelve-sided discs (level.movers).
+// - LOOP: a level with `loop: P` repeats every P meters up and down, forever. Positions are never wrapped: the walls are simply
+//   looked up at (y mod P), and goals and route points are slid to the copy nearest the core (worldFollow).
 const WALL_T = 0.4, GRID = 6;
 
 // ------------------------------------------------------------------ small geometry helpers (shared with models.js)
@@ -23,7 +31,8 @@ const polar = (a, r, y) => [r * Math.cos(a), y, r * Math.sin(a)];
 function reflect(vel, n, bounce) { const vn = vel.dot(n); if (vn >= 0) return 0; vel.addScaledVector(n, -(1 + bounce) * vn); return -vn; }
 
 // The level being played. Filled by loadLevel().
-const WORLD = { level: null, rooms: [], walls: [], goals: [], nodes: [], windows: [], doors: [], bounds: null, cells: new Map(), nodeCells: new Map(), routes: new Map() };
+const WORLD = { level: null, rooms: [], walls: [], goals: [], nodes: [], windows: [], doors: [], coves: [], orbs: [], movers: [], bounds: null, loop: 0, oy: 0,
+                cells: new Map(), nodeCells: new Map(), routes: new Map() };
 const AX = { x: 0, y: 1, z: 2 }, FACES = ['+x', '-x', '+y', '-y', '+z', '-z'];
 const faceUV = a => (a === 0 ? [2, 1] : a === 1 ? [0, 2] : [0, 1]);   // which axes run along a face: x face -> (z, y), y face -> (x, z), z face -> (x, y)
 
@@ -37,7 +46,7 @@ function expandRooms(level) {
     return m;
   };
   for (const r of level.rooms) {
-    const base = { id: r.id, min: [r.x[0], r.y[0], r.z[0]], max: [r.x[1], r.y[1], r.z[1]], kind: r.kind || 'corridor', faces: r.faces || {}, label: r.label, tint: r.tint };
+    const base = { id: r.id, min: [r.x[0], r.y[0], r.z[0]], max: [r.x[1], r.y[1], r.z[1]], kind: r.kind || 'corridor', faces: r.faces || {}, label: r.label, tint: r.tint, cove: r.cove };
     const copies = [[base, '']];
     const m = r.m === undefined ? level.sym : r.m;
     if (m === 'xz') { copies.push([flip(base, 0), '~x'], [flip(base, 2), '~z'], [flip(flip(base, 0), 2), '~xz']); }
@@ -52,29 +61,49 @@ function expandRooms(level) {
 function toOrange(level, p) { return level.point ? [-p[0], p[1], -p[2]] : [p[0], p[1], -p[2]]; }
 
 // ------------------------------------------------------------------ walls
-// spec: 'hull' | 'field' | 'open' | 'mirror', or { mat, win: [width, gap, low, high] } for a row of open windows.
+// spec: 'hull' | 'field' | 'open', or { mat, win: [width, gap, low, high] } for a row of open windows.
 function faceSpec(level, room, f) {
   const d = level.kinds[room.kind] || level.kinds.corridor, spec = room.faces[f] !== undefined ? room.faces[f] : f === '-y' ? d.floor : f === '+y' ? d.ceil : (f[1] === 'z' ? (d.end || d.side) : d.side);
   return typeof spec === 'string' ? { mat: spec } : spec;
 }
+// How the edges of this room that run along axis a3 are rounded: { R, profile?, mat? } or null for a sharp edge.
+// profile = points from [1, 0] to [0, 1] in units of R (distance from wall A, distance from wall B); none = a quarter circle.
+function coveSpec(level, room, a3) {
+  const own = room.cove, k = level.kinds[room.kind] || {};
+  const v = own !== undefined && typeof own === 'object' ? (own['xyz'[a3]] !== undefined ? own['xyz'[a3]] : k.r) : own !== undefined ? own : k.r;
+  return !v ? null : typeof v === 'number' ? { R: v } : v;
+}
+function facetPlanes(profile, R) {
+  const out = [];
+  for (let i = 0; i + 1 < profile.length; i++) {
+    const p0 = profile[i][0] * R, q0 = profile[i][1] * R, dp = profile[i + 1][0] * R - p0, dq = profile[i + 1][1] * R - q0, len = Math.hypot(dp, dq);
+    let np = -dq / len, nq = dp / len; if (np * (R - p0) + nq * (R - q0) < 0) { np = -np; nq = -nq; }
+    out.push({ np, nq, d: np * p0 + nq * q0 });
+  }
+  return out;
+}
 function loadLevel(level) {
-  const W = WORLD;
-  Object.assign(W, { level, rooms: expandRooms(level), walls: [], quads: [], goals: [], nodes: [], windows: [], doors: [], cells: new Map(), nodeCells: new Map(), routes: new Map(), frames: [] });
+  const W = WORLD, sharp = !!level.sharp;
+  Object.assign(W, { level, rooms: expandRooms(level), walls: [], quads: [], goals: [], nodes: [], windows: [], doors: [], cells: new Map(), nodeCells: new Map(), routes: new Map(),
+                     frames: [], coves: [], rounds: [], veils: [], orbs: [], movers: [], loop: level.loop || 0, oy: 0 });
   W.bounds = { min: new T.Vector3(...level.bounds[0]), max: new T.Vector3(...level.bounds[1]) };
   // goals: defined for the blue end, mirrored for orange
-  for (const g of level.goals) for (const team of ['blue', 'orange']) {
+  for (const g of level.goals || []) for (const team of ['blue', 'orange']) {
     const c = team === 'blue' ? g.c : toOrange(level, g.c), n = team === 'blue' ? g.n : toOrange(level, g.n);
-    W.goals.push({ team, kind: g.kind, c: new T.Vector3(...c), n: new T.Vector3(...n).normalize(), r: g.r || (g.kind === 'deep' ? 1.9 : 1.6), points: POINTS[g.kind] });
+    W.goals.push({ team, kind: g.kind, c: new T.Vector3(...c), by: c[1], n: new T.Vector3(...n).normalize(), r: g.r || (g.kind === 'deep' ? 1.9 : 1.6), points: POINTS[g.kind] });
   }
-  const sealed = (a, b) => (level.seals || []).some(([p, q]) => (a.base === p && b.base === q) || (a.base === q && b.base === p));
+  const pair = (list, a, b) => (list || []).some(([p, q]) => (a.base === p && b.base === q) || (a.base === q && b.base === p));
   const addWall = (min, max, mat) => { const w = { min, max, mat, i: W.walls.length }; W.walls.push(w); return w; };
+
+  // ---- pass 1: every face of every room, and the holes in it (doorways, goal plates, windows)
   W.rooms.forEach((room, ri) => {
+    room.i = ri; room.info = {}; room.coves = {}; room.coveList = [];
     for (const f of FACES) {
       const a = AX[f[1]], s = f[0] === '+' ? 1 : -1, [ua, va] = faceUV(a), k = s > 0 ? room.max.getComponent(a) : room.min.getComponent(a);
       const spec = faceSpec(level, room, f);
-      if (spec.mat === 'open') continue;
       const u0 = room.min.getComponent(ua), u1 = room.max.getComponent(ua), v0 = room.min.getComponent(va), v1 = room.max.getComponent(va);
-      const holes = [];
+      const holes = [], I = room.info[f] = { f, a, s, k, ua, va, u0, u1, v0, v1, spec, holes };
+      if (spec.mat === 'open') continue;
       // doorways: any room whose opposite face sits on this plane and overlaps
       W.rooms.forEach((o, oi) => {
         if (o === room) return;
@@ -82,9 +111,12 @@ function loadLevel(level) {
         if (Math.abs(ok - k) > 0.02) return;
         const a0 = Math.max(u0, o.min.getComponent(ua)), a1 = Math.min(u1, o.max.getComponent(ua)), b0 = Math.max(v0, o.min.getComponent(va)), b1 = Math.min(v1, o.max.getComponent(va));
         if (a1 - a0 < 0.6 || b1 - b0 < 0.6) return;
-        if (sealed(room, o)) { if (oi < ri) holes.push({ u0: a0, u1: a1, v0: b0, v1: b1, kind: 'skip' }); else holes.push({ u0: a0, u1: a1, v0: b0, v1: b1, kind: 'seal' }); return; }
-        holes.push({ u0: a0, u1: a1, v0: b0, v1: b1, kind: 'door' });
-        if (oi > ri) { const c = [0, 0, 0]; c[a] = k; c[ua] = (a0 + a1) / 2; c[va] = (b0 + b1) / 2; W.doors.push({ c: new T.Vector3(...c), a, size: [a1 - a0, b1 - b0] }); }
+        if (pair(level.seals, room, o)) { holes.push({ u0: a0, u1: a1, v0: b0, v1: b1, kind: oi < ri ? 'skip' : 'seal' }); return; }
+        holes.push({ u0: a0, u1: a1, v0: b0, v1: b1, kind: 'door', lead: oi > ri });
+        if (oi > ri) {
+          const c = [0, 0, 0]; c[a] = k; c[ua] = (a0 + a1) / 2; c[va] = (b0 + b1) / 2; W.doors.push({ c: new T.Vector3(...c), a, size: [a1 - a0, b1 - b0] });
+          if (pair(level.veils, room, o)) W.veils.push({ a, k, ua, va, u0: a0, u1: a1, v0: b0, v1: b1 });
+        }
       });
       // goal plates: a square cut out of the drawn wall (the plate itself stays solid, see below)
       for (const g of W.goals) {
@@ -106,40 +138,92 @@ function loadLevel(level) {
           const c = [0, 0, 0]; c[a] = k; c[ua] = (h.u0 + h.u1) / 2; c[va] = (h.v0 + h.v1) / 2;
           const nrm = [0, 0, 0]; nrm[a] = s;
           W.windows.push({ c: new T.Vector3(...c), n: new T.Vector3(...nrm), a, size: [h.u1 - h.u0, h.v1 - h.v0], room: ri });
-          W.frames.push({ a, k, ua, va, ...h, color: 'accent' });
         }
-      }
-      // cut the face into a grid along every hole edge, then merge runs of solid cells into slabs
-      const cut = (lo, hi, list) => [...new Set([lo, hi, ...list.map(x => Math.max(lo, Math.min(hi, x)))])].sort((p, q) => p - q);
-      const U = cut(u0, u1, holes.flatMap(h => [h.u0, h.u1])), V = cut(v0, v1, holes.flatMap(h => [h.v0, h.v1]));
-      for (let j = 0; j < V.length - 1; j++) {
-        let run = null;
-        const flush = () => { if (!run) return; emit(run.u0, run.u1, V[j], V[j + 1], run.kind); run = null; };
-        for (let i = 0; i < U.length - 1; i++) {
-          const cu = (U[i] + U[i + 1]) / 2, cv = (V[j] + V[j + 1]) / 2, h = holes.find(h => cu > h.u0 && cu < h.u1 && cv > h.v0 && cv < h.v1);
-          const kind = !h ? 'wall' : h.kind;
-          if (run && run.kind === kind) run.u1 = U[i + 1]; else { flush(); run = { u0: U[i], u1: U[i + 1], kind }; }
-        }
-        flush();
-      }
-      function emit(a0, a1, b0, b1, kind) {
-        if (kind === 'door' || kind === 'window' || kind === 'skip') return;
-        const mn = [0, 0, 0], mx = [0, 0, 0];
-        mn[a] = k - WALL_T / 2; mx[a] = k + WALL_T / 2; mn[ua] = a0; mx[ua] = a1; mn[va] = b0; mx[va] = b1;
-        const mat = kind === 'seal' ? 'hazard' : kind === 'goal' ? 'goal' : spec.mat;
-        addWall(new T.Vector3(...mn), new T.Vector3(...mx), mat);
-        if (kind !== 'goal') W.quads.push({ a, s, k, ua, va, u0: a0, u1: a1, v0: b0, v1: b1, mat, room, floor: f === '-y' });
       }
     }
   });
-  // free-standing blocks (pillars, partitions, the walls inside loops) and the penalty box
+
+  // ---- pass 2: coves. An edge is rounded wherever BOTH of its walls are solid right up to it (no doorway, window or goal there).
+  const cutOut = (ivs, lo, hi) => ivs.flatMap(([a, b]) => (hi <= a || lo >= b ? [[a, b]] : [[a, Math.min(b, lo)], [Math.max(a, hi), b]].filter(([x, y]) => y - x > 1e-6)));
+  const both = (A, B) => A.flatMap(([a, b]) => B.map(([c, d]) => [Math.max(a, c), Math.min(b, d)])).filter(([x, y]) => y - x > 0.6);
+  if (!sharp) for (const room of W.rooms) for (let i = 0; i < 6; i++) for (let j = i + 1; j < 6; j++) {
+    const A = room.info[FACES[i]], B = room.info[FACES[j]];
+    if (A.a === B.a || A.spec.mat === 'open' || B.spec.mat === 'open') continue;
+    const a3 = 3 - A.a - B.a, cv = coveSpec(level, room, a3); if (!cv) continue;
+    const size = room.max.clone().sub(room.min), R = Math.min(cv.R, size.getComponent(A.a) / 2, size.getComponent(B.a) / 2); if (R < 0.3) continue;
+    const lo = room.min.getComponent(a3), hi = room.max.getComponent(a3);
+    const solidOf = (F, O) => {
+      let ivs = [[lo, hi]]; const band = O.s > 0 ? [O.k - R, O.k] : [O.k, O.k + R];
+      for (const h of F.holes) {
+        if (h.kind !== 'door' && h.kind !== 'window' && h.kind !== 'goal') continue;
+        const ext = ax => (ax === F.ua ? [h.u0, h.u1] : [h.v0, h.v1]), [p0, p1] = ext(O.a), [t0, t1] = ext(a3);
+        if (p1 > band[0] + 0.01 && p0 < band[1] - 0.01) ivs = cutOut(ivs, t0, t1);
+      }
+      return ivs;
+    };
+    const ivs = both(solidOf(A, B), solidOf(B, A)); if (!ivs.length) continue;
+    const mat = cv.mat || (A.spec.mat === 'field' && B.spec.mat === 'field' ? 'field' : 'hull');
+    const c = { room, A, B, a3, R, ivs, mat, profile: cv.profile || null, planes: cv.profile ? facetPlanes(cv.profile, R) : null, low: A.f === '-y' || B.f === '-y', high: A.f === '+y' || B.f === '+y' };
+    room.coves[A.f + B.f] = room.coves[B.f + A.f] = c; room.coveList.push(c); W.coves.push(c);
+  }
+
+  // ---- pass 3: cut every face into a grid along every hole and cove edge, then merge runs of solid cells into slabs
+  for (const room of W.rooms) for (const f of FACES) {
+    const I = room.info[f], { a, s, k, ua, va, u0, u1, v0, v1, holes, spec } = I;
+    if (spec.mat === 'open') continue;
+    const border = (ax, sg) => room.coves[f + (sg > 0 ? '+' : '-') + 'xyz'[ax]];
+    const cu0 = border(ua, -1), cu1 = border(ua, 1), cv0 = border(va, -1), cv1 = border(va, 1);
+    const cutsU = holes.flatMap(h => [h.u0, h.u1]), cutsV = holes.flatMap(h => [h.v0, h.v1]);
+    if (cu0) { cutsU.push(u0 + cu0.R); cutsV.push(...cu0.ivs.flat()); } if (cu1) { cutsU.push(u1 - cu1.R); cutsV.push(...cu1.ivs.flat()); }
+    if (cv0) { cutsV.push(v0 + cv0.R); cutsU.push(...cv0.ivs.flat()); } if (cv1) { cutsV.push(v1 - cv1.R); cutsU.push(...cv1.ivs.flat()); }
+    const within = (c, t) => c.ivs.some(([x, y]) => t > x && t < y);
+    const coved = (cu, cv) => (cu0 && cu - u0 < cu0.R && within(cu0, cv)) || (cu1 && u1 - cu < cu1.R && within(cu1, cv)) || (cv0 && cv - v0 < cv0.R && within(cv0, cu)) || (cv1 && v1 - cv < cv1.R && within(cv1, cu));
+    const cut = (lo, hi, list) => [...new Set([lo, hi, ...list.map(x => Math.max(lo, Math.min(hi, x)))])].sort((p, q) => p - q);
+    const U = cut(u0, u1, cutsU), V = cut(v0, v1, cutsV);
+    const emit = (a0, a1, b0, b1, kind) => {
+      if (kind === 'door' || kind === 'window' || kind === 'skip') return;
+      const mn = [0, 0, 0], mx = [0, 0, 0];
+      mn[a] = k - WALL_T / 2; mx[a] = k + WALL_T / 2; mn[ua] = a0; mx[ua] = a1; mn[va] = b0; mx[va] = b1;
+      const mat = kind === 'seal' ? 'hazard' : kind === 'goal' ? 'goal' : spec.mat;
+      addWall(new T.Vector3(...mn), new T.Vector3(...mx), mat);
+      if (kind !== 'goal' && kind !== 'cove') W.quads.push({ a, s, k, ua, va, u0: a0, u1: a1, v0: b0, v1: b1, mat, room, floor: f === '-y' });
+    };
+    for (let j = 0; j < V.length - 1; j++) {
+      let run = null;
+      const flush = () => { if (!run) return; emit(run.u0, run.u1, V[j], V[j + 1], run.kind); run = null; };
+      for (let i = 0; i < U.length - 1; i++) {
+        const cu = (U[i] + U[i + 1]) / 2, cv = (V[j] + V[j + 1]) / 2, h = holes.find(h => cu > h.u0 && cu < h.u1 && cv > h.v0 && cv < h.v1);
+        const kind = h ? h.kind : coved(cu, cv) ? 'cove' : 'wall';
+        if (run && run.kind === kind) run.u1 = U[i + 1]; else { flush(); run = { u0: U[i], u1: U[i + 1], kind }; }
+      }
+      flush();
+    }
+    // rounded corners for the windows, and for each doorway (drawn once, by the room listed first)
+    for (const h of holes) {
+      const win = h.kind === 'window'; if (!win && !(h.kind === 'door' && h.lead)) continue;
+      const r = sharp ? 0 : Math.min(win ? 1.0 : 1.5, 0.22 * Math.min(h.u1 - h.u0, h.v1 - h.v0));
+      W.frames.push({ a, k, ua, va, u0: h.u0, u1: h.u1, v0: h.v0, v1: h.v1, r, color: win ? 'accent' : 'white', door: !win });
+      if (r < 0.3) continue;
+      for (const [cu, du] of [[h.u0, 1], [h.u1, -1]]) for (const [cv, dv] of [[h.v0, 1], [h.v1, -1]]) {
+        W.rounds.push({ a, s, k, ua, va, cu, cv, du, dv, r, mat: spec.mat, room, floor: f === '-y' });
+        const c = r * 0.3, mn = [0, 0, 0], mx = [0, 0, 0];
+        mn[a] = k - WALL_T / 2; mx[a] = k + WALL_T / 2; mn[ua] = Math.min(cu, cu + du * c); mx[ua] = Math.max(cu, cu + du * c); mn[va] = Math.min(cv, cv + dv * c); mx[va] = Math.max(cv, cv + dv * c);
+        addWall(new T.Vector3(...mn), new T.Vector3(...mx), 'trim');
+      }
+    }
+  }
+
+  // free-standing blocks (pillars, partitions), round rocks, moving platforms and the penalty box
+  const halves = it => (it.m === '' ? ['blue'] : ['blue', 'orange']);
   W.blocks = [];
-  for (const b of level.blocks || []) for (const half of ['blue', 'orange']) {
-    if (half === 'orange' && b.m === '') continue;
+  for (const b of level.blocks || []) for (const half of halves(b)) {
     const c = half === 'blue' ? b.c : toOrange(level, b.c);
     const mn = new T.Vector3(c[0] - b.s[0] / 2, c[1] - b.s[1] / 2, c[2] - b.s[2] / 2), mx = new T.Vector3(c[0] + b.s[0] / 2, c[1] + b.s[1] / 2, c[2] + b.s[2] / 2);
     W.blocks.push({ ...addWall(mn, mx, b.mat || 'hull'), style: b.style });
   }
+  (level.orbs || []).forEach((o, i) => { for (const half of halves(o)) W.orbs.push({ c: new T.Vector3(...(half === 'blue' ? o.c : toOrange(level, o.c))), r: o.r, style: o.style || level.theme.orb || 'rock', seed: i * 7 + (half === 'blue' ? 1 : 4) }); });
+  (level.movers || []).forEach((m, i) => { for (const half of halves(m)) W.movers.push({ ...m, i, flip: half === 'orange', pos: new T.Vector3(), vel: new T.Vector3(), spin: 0 }); });
+  updateMovers(0, 0);
   W.bin = null;
   if (level.bin) {
     const [bx, by, bz] = level.bin.c, [sx, sy, sz] = level.bin.s, t = 0.3, box = { min: new T.Vector3(bx - sx / 2, by - sy / 2, bz - sz / 2), max: new T.Vector3(bx + sx / 2, by + sy / 2, bz + sz / 2) };
@@ -155,6 +239,7 @@ function loadLevel(level) {
     const g = 1.3, i0 = Math.floor((w.min.x - g) / GRID), i1 = Math.floor((w.max.x + g) / GRID), j0 = Math.floor((w.min.y - g) / GRID), j1 = Math.floor((w.max.y + g) / GRID), k0 = Math.floor((w.min.z - g) / GRID), k1 = Math.floor((w.max.z + g) / GRID);
     for (let i = i0; i <= i1; i++) for (let j = j0; j <= j1; j++) for (let k = k0; k <= k1; k++) { const key = cellKey(i, j, k); let c = W.cells.get(key); if (!c) W.cells.set(key, c = []); c.push(w); }
   }
+  W.coveRooms = W.rooms.filter(r => r.coveList.length);
   buildGraph();
   return W;
 }
@@ -162,11 +247,68 @@ const cellKey = (i, j, k) => (i + 512) + (j + 512) * 1024 + (k + 512) * 1048576;
 const EMPTY = [];
 function wallsNear(p) { return WORLD.cells.get(cellKey(Math.floor(p.x / GRID), Math.floor(p.y / GRID), Math.floor(p.z / GRID))) || EMPTY; }
 
+// ------------------------------------------------------------------ moving platforms
+// Where a mover is at time t. Paths: orbit (round a point, with an optional bob), line (back and forth), helix (round and up, forever).
+function moverAt(m, t, out) {
+  const p = m.path, P = WORLD.loop;
+  if (p.type === 'orbit') { const a = (p.ph || 0) + p.w * t; out.set(p.c[0] + p.R * Math.cos(a), p.c[1] + (p.bob ? p.bob[0] * Math.sin(p.bob[1] * t + (p.ph || 0)) : 0), p.c[2] + p.R * Math.sin(a)); }
+  else if (p.type === 'line') { const k = 0.5 - 0.5 * Math.cos(Math.PI * 2 * (t / p.T + (p.ph || 0))); out.set(p.a[0] + (p.b[0] - p.a[0]) * k, p.a[1] + (p.b[1] - p.a[1]) * k, p.a[2] + (p.b[2] - p.a[2]) * k); }
+  else if (p.type === 'helix') { const a = (p.ph || 0) + p.w * t, y = p.y0 + p.climb * t; out.set(p.c[0] + p.R * Math.cos(a), P ? y - P * Math.floor(y / P) : y, p.c[1] + p.R * Math.sin(a)); }
+  else out.set(...p.c);
+  if (m.flip) { const q = toOrange(WORLD.level, [out.x, out.y, out.z]); out.set(q[0], q[1], q[2]); }
+  return out;
+}
+const _mv = new T.Vector3();
+function updateMovers(t, dt) {
+  const P = WORLD.loop;
+  for (const m of WORLD.movers) {
+    _mv.copy(m.pos); moverAt(m, t, m.pos);
+    if (dt > 0) { m.vel.subVectors(m.pos, _mv).divideScalar(dt); if (P && Math.abs(m.vel.y) > P / 4 / dt) m.vel.y = (m.path.climb || 0); } else m.vel.set(0, 0, 0);
+    m.spin = (m.spinRate || 0.25) * t * (m.i % 2 ? -1 : 1);
+  }
+  WORLD.time = t;
+}
+
 // ------------------------------------------------------------------ collision
 const _c = new T.Vector3(), _n = new T.Vector3();
-// Keeps a sphere out of every wall and inside the outer boundary, bouncing its velocity. Returns the hardest hit speed.
+// Inside a cove's corner zone? Pushes the sphere back onto the curve (or the facets) and bounces it. Returns the hit speed or -1.
+function coveHit(c, pos, vel, r, bounce, hit) {
+  const t = pos.getComponent(c.a3); let on = false;
+  for (const iv of c.ivs) if (t >= iv[0] && t <= iv[1]) { on = true; break; }
+  if (!on) return -1;
+  const A = c.A, B = c.B, R = c.R; let p = (A.k - pos.getComponent(A.a)) * A.s, q = (B.k - pos.getComponent(B.a)) * B.s;
+  if (p < 0 || q < 0 || p >= R || q >= R) return -1;
+  let impact = -1;
+  const shove = (np, nq, by) => {
+    p += np * by; q += nq * by;
+    pos.setComponent(A.a, A.k - A.s * p); pos.setComponent(B.a, B.k - B.s * q);
+    _n.set(0, 0, 0); _n.setComponent(A.a, -A.s * np); _n.setComponent(B.a, -B.s * nq);
+    impact = Math.max(impact, reflect(vel, _n, bounce)); if (hit) { hit.normal = _n.clone(); hit.wall = c; }
+  };
+  if (!c.planes) { const dx = R - p, dy = R - q, d = Math.hypot(dx, dy), lim = R - r; if (lim > 0 && d > lim) shove(dx / d, dy / d, d - lim); }
+  else for (const pl of c.planes) { const sd = pl.np * p + pl.nq * q - pl.d; if (sd < r) shove(pl.np, pl.nq, r - sd); }
+  return impact;
+}
+// A flat disc (a cylinder standing on its axis): the moving platforms.
+function discHit(m, pos, vel, r, bounce, hit) {
+  const P = WORLD.loop; let dy = pos.y - m.pos.y; if (P) dy -= P * Math.round(dy / P);
+  const hh = m.h / 2, dx = pos.x - m.pos.x, dz = pos.z - m.pos.z, rad = Math.hypot(dx, dz);
+  if (Math.abs(dy) > hh + r || rad > m.r + r) return -1;
+  const cr = Math.min(rad, m.r), cy = Math.max(-hh, Math.min(hh, dy)), k = rad > 1e-6 ? cr / rad : 0;
+  let nx = dx - dx * k, ny = dy - cy, nz = dz - dz * k, d = Math.hypot(nx, ny, nz), by;
+  if (d > 1e-6) { if (d >= r) return -1; nx /= d; ny /= d; nz /= d; by = r - d; }
+  else if (hh - Math.abs(dy) < m.r - rad) { nx = 0; nz = 0; ny = dy >= 0 ? 1 : -1; by = hh - Math.abs(dy) + r; }      // inside: out through the nearer face
+  else { nx = rad > 1e-6 ? dx / rad : 1; nz = rad > 1e-6 ? dz / rad : 0; ny = 0; by = m.r - rad + r; }
+  pos.x += nx * by; pos.y += ny * by; pos.z += nz * by;
+  _n.set(nx, ny, nz); vel.sub(m.vel); const impact = reflect(vel, _n, bounce); vel.add(m.vel);
+  if (hit) { hit.normal = _n.clone(); hit.wall = m; }
+  return impact;
+}
+// Keeps a sphere out of every wall, cove, rock and platform and inside the outer boundary, bouncing its velocity.
+// Returns the hardest hit speed.
 function constrainSphere(pos, vel, r, bounce, hit) {
-  let impact = 0;
+  const W = WORLD, P = W.loop, sh = P ? P * Math.floor(pos.y / P) : 0;
+  let impact = 0; pos.y -= sh;
   for (let pass = 0; pass < 2; pass++) {
     let touched = false;
     for (const w of wallsNear(pos)) {
@@ -184,20 +326,48 @@ function constrainSphere(pos, vel, r, bounce, hit) {
       impact = Math.max(impact, reflect(vel, _n, bounce)); touched = true;
       if (hit) { hit.normal = _n.clone(); hit.wall = w; }
     }
+    for (const room of W.coveRooms) {
+      if (pos.x < room.min.x || pos.x > room.max.x || pos.y < room.min.y || pos.y > room.max.y || pos.z < room.min.z || pos.z > room.max.z) continue;
+      for (const c of room.coveList) { const k = coveHit(c, pos, vel, r, bounce, hit); if (k >= 0) { impact = Math.max(impact, k); touched = true; } }
+    }
+    for (const o of W.orbs) {
+      const dx = pos.x - o.c.x, dy = pos.y - o.c.y, dz = pos.z - o.c.z, d2 = dx * dx + dy * dy + dz * dz, lim = o.r + r;
+      if (d2 >= lim * lim) continue;
+      const d = Math.sqrt(d2) || 1e-4; _n.set(dx / d, dy / d, dz / d); pos.copy(o.c).addScaledVector(_n, lim);
+      impact = Math.max(impact, reflect(vel, _n, bounce)); touched = true; if (hit) { hit.normal = _n.clone(); hit.wall = o; }
+    }
+    for (const m of W.movers) { const k = discHit(m, pos, vel, r, bounce, hit); if (k >= 0) { impact = Math.max(impact, k); touched = true; } }
     if (!touched) break;
   }
-  const b = WORLD.bounds;
-  for (const ax of ['x', 'y', 'z']) {
+  const b = W.bounds;
+  for (const ax of P ? ['x', 'z'] : ['x', 'y', 'z']) {
     if (pos[ax] < b.min[ax] + r) { pos[ax] = b.min[ax] + r; if (vel[ax] < 0) { impact = Math.max(impact, -vel[ax]); vel[ax] *= -bounce; if (hit) hit.edge = true; } }
     if (pos[ax] > b.max[ax] - r) { pos[ax] = b.max[ax] - r; if (vel[ax] > 0) { impact = Math.max(impact, vel[ax]); vel[ax] *= -bounce; if (hit) hit.edge = true; } }
   }
+  pos.y += sh;
   return impact;
 }
-// Is p inside a wall (grown by margin), or outside the boundary?
-function solidAt(p, margin = 0) {
-  const b = WORLD.bounds;
-  if (p.x < b.min.x || p.x > b.max.x || p.y < b.min.y || p.y > b.max.y || p.z < b.min.z || p.z > b.max.z) return true;
+// Is p inside something solid (grown by margin), or outside the boundary?
+const _f = new T.Vector3();
+function solidAt(p0, margin = 0) {
+  const W = WORLD, b = W.bounds, P = W.loop, p = P ? _f.set(p0.x, p0.y - P * Math.floor(p0.y / P), p0.z) : p0;
+  if (p.x < b.min.x || p.x > b.max.x || p.z < b.min.z || p.z > b.max.z || (!P && (p.y < b.min.y || p.y > b.max.y))) return true;
   for (const w of wallsNear(p)) if (p.x > w.min.x - margin && p.x < w.max.x + margin && p.y > w.min.y - margin && p.y < w.max.y + margin && p.z > w.min.z - margin && p.z < w.max.z + margin) return true;
+  for (const o of W.orbs) if (p.distanceToSquared(o.c) < (o.r + margin) * (o.r + margin)) return true;
+  for (const m of W.movers) {
+    let dy = p.y - m.pos.y; if (P) dy -= P * Math.round(dy / P);
+    if (Math.abs(dy) < m.h / 2 + margin && Math.hypot(p.x - m.pos.x, p.z - m.pos.z) < m.r + margin) return true;
+  }
+  for (const room of W.coveRooms) {
+    if (p.x < room.min.x || p.x > room.max.x || p.y < room.min.y || p.y > room.max.y || p.z < room.min.z || p.z > room.max.z) continue;
+    for (const c of room.coveList) {
+      const t = p.getComponent(c.a3); if (!c.ivs.some(iv => t >= iv[0] && t <= iv[1])) continue;
+      const pp = (c.A.k - p.getComponent(c.A.a)) * c.A.s, q = (c.B.k - p.getComponent(c.B.a)) * c.B.s, R = c.R;
+      if (pp < 0 || q < 0 || pp >= R || q >= R) continue;
+      if (!c.planes) { if (Math.hypot(R - pp, R - q) > R - margin) return true; }
+      else for (const pl of c.planes) if (pl.np * pp + pl.nq * q - pl.d < margin) return true;
+    }
+  }
   return false;
 }
 const freeAt = (p, margin = 0) => !solidAt(p, margin);
@@ -208,29 +378,43 @@ function clearLine(a, b, margin = 0.25) {
   for (let i = 1; i < steps; i++) { _s.lerpVectors(a, b, i / steps); if (solidAt(_s, margin)) return false; }
   return true;
 }
-function roomAt(p) { for (const r of WORLD.rooms) if (p.x >= r.min.x && p.x <= r.max.x && p.y >= r.min.y && p.y <= r.max.y && p.z >= r.min.z && p.z <= r.max.z) return r; return null; }
+function roomAt(p) {
+  const P = WORLD.loop, y = P ? p.y - P * Math.floor(p.y / P) : p.y;
+  for (const r of WORLD.rooms) if (p.x >= r.min.x && p.x <= r.max.x && y >= r.min.y && y <= r.max.y && p.z >= r.min.z && p.z <= r.max.z) return r;
+  return null;
+}
+// A looping level: slide the goals and the bots' route points to the copy of the level nearest height y (where the core is).
+// Returns true when the route points moved (paths planned before that are stale).
+function worldFollow(y) {
+  const W = WORLD, P = W.loop; if (!P) return false;
+  for (const g of W.goals) g.c.y = g.by + P * Math.round((y - g.by) / P);
+  const oy = P * Math.floor(y / P); if (oy === W.oy) return false;
+  W.oy = oy; for (const n of W.nodes) n.p.y = n.by + oy;
+  return true;
+}
 
 // ------------------------------------------------------------------ route graph (built per level)
 function buildGraph() {
-  const W = WORLD, level = W.level, nodes = W.nodes;
-  const add = (p, kind) => { if (solidAt(p, 0.75)) return -1; nodes.push({ p: p.clone(), kind, n: [] }); return nodes.length - 1; };
+  const W = WORLD, level = W.level, nodes = W.nodes, b = W.bounds, P = W.loop;
+  const add = (p, kind) => { if (solidAt(p, 0.75)) return -1; nodes.push({ p: p.clone(), by: p.y, kind, n: [] }); return nodes.length - 1; };
   for (const r of W.rooms) {
-    const size = r.max.clone().sub(r.min), c = r.min.clone().add(r.max).multiplyScalar(0.5);
+    const size = r.max.clone().sub(r.min);
     const count = ax => Math.max(1, Math.round(size.getComponent(ax) / 11));
-    const nx = count(0), ny = Math.min(2, count(1)), nz = count(2);
+    const nx = count(0), ny = Math.min(P ? 4 : 2, count(1)), nz = count(2);
     for (let i = 0; i < nx; i++) for (let j = 0; j < ny; j++) for (let k = 0; k < nz; k++)
       add(new T.Vector3(r.min.x + size.x * (i + 0.5) / nx, r.min.y + size.y * (j + 0.5) / ny, r.min.z + size.z * (k + 0.5) / nz), 'room');
   }
   for (const d of W.doors) add(d.c, 'door');
   if (level.exterior !== false) {
     for (const w of W.windows) { add(w.c, 'window'); const out = w.c.clone().addScaledVector(w.n, 5); if (!nodes.some(n => n.kind === 'air' && n.p.distanceTo(out) < 7)) add(out, 'air'); }
-    const b = W.bounds, step = 22;
-    for (let x = b.min.x + 8; x < b.max.x - 4; x += step) for (let y = b.min.y + 6; y < b.max.y - 4; y += step) for (let z = b.min.z + 8; z < b.max.z - 4; z += step) {
+    const step = W.rooms.length ? 22 : 13, y0 = P ? 4 : b.min.y + 6, y1 = P ? P - 3 : b.max.y - 4;
+    for (let x = b.min.x + 8; x < b.max.x - 4; x += step) for (let y = y0; y < y1; y += step) for (let z = b.min.z + 8; z < b.max.z - 4; z += step) {
       const p = new T.Vector3(x, y, z);
-      if (!roomAt(p) && !(W.bin && p.distanceTo(W.bin.c) < 12)) add(p, 'air');
+      if (!roomAt(p) && !(W.bin && p.distanceTo(W.bin.c) < 12)) add(p, W.rooms.length ? 'air' : 'room');
     }
   }
-  for (const b of level.extraNodes || []) for (const p of [b, toOrange(level, b)]) add(new T.Vector3(...p), 'room');
+  for (const z of level.zones || []) if (z.c) add(new T.Vector3(...z.c), 'room');
+  for (const e of level.extraNodes || []) for (const p of [e, toOrange(level, e)]) add(new T.Vector3(...p), 'room');
   // connect each node to its nearest visible neighbours; travel through space costs a little more, so bots prefer the corridors
   nodes.forEach((n, i) => {
     const near = nodes.map((m, j) => [j, m.p.distanceTo(n.p)]).filter(([j, d]) => j !== i && d < 36).sort((p, q) => p[1] - q[1]).slice(0, 14);
@@ -244,7 +428,7 @@ function buildGraph() {
   nodes.forEach((n, i) => { const key = cellKey(Math.floor(n.p.x / 12), Math.floor(n.p.y / 12), Math.floor(n.p.z / 12)); let c = W.nodeCells.get(key); if (!c) W.nodeCells.set(key, c = []); c.push(i); });
 }
 function nearestNode(p) {
-  const W = WORLD, ci = Math.floor(p.x / 12), cj = Math.floor(p.y / 12), ck = Math.floor(p.z / 12);
+  const W = WORLD, ci = Math.floor(p.x / 12), cj = Math.floor((p.y - W.oy) / 12), ck = Math.floor(p.z / 12);
   let best = -1, bd = Infinity, any = -1, ad = Infinity;
   for (let i = ci - 2; i <= ci + 2; i++) for (let j = cj - 2; j <= cj + 2; j++) for (let k = ck - 2; k <= ck + 2; k++) for (const id of W.nodeCells.get(cellKey(i, j, k)) || EMPTY) {
     const d = W.nodes[id].p.distanceToSquared(p);
@@ -279,198 +463,3 @@ function routeBetween(a, b) {
 }
 // A path of points from p to q that the route graph can fly.
 function pathPoints(p, q) { return routeBetween(nearestNode(p), nearestNode(q)).map(i => WORLD.nodes[i].p); }
-
-// ------------------------------------------------------------------ textures painted for the level look
-const WTEX = {};
-function wtex(key, w, h, paint, opts = {}) {
-  if (WTEX[key]) return WTEX[key];
-  const t = canvasTexture(w, h, paint);
-  t.wrapS = t.wrapT = T.RepeatWrapping; t.anisotropy = 8;
-  if (opts.nearest) { t.magFilter = T.NearestFilter; }
-  return (WTEX[key] = t);
-}
-// Hull panels drawn like cel animation: flat fill, bold dark seams, a few rivets and stencil marks.
-const panelArt = () => wtex('panel', 512, 512, (g, w, h) => {
-  g.fillStyle = '#ffffff'; g.fillRect(0, 0, w, h);
-  const rnd = seeded(31);
-  for (let i = 0; i < 2; i++) for (let j = 0; j < 2; j++) { g.fillStyle = ['#ffffff', '#eeeeee', '#f6f6f6', '#e6e6e6'][(i * 2 + j + (i ? 1 : 0)) % 4]; g.fillRect(i * w / 2, j * h / 2, w / 2, h / 2); }
-  g.strokeStyle = '#30343c'; g.lineWidth = 7; g.strokeRect(0, 0, w, h); g.beginPath(); g.moveTo(w / 2, 0); g.lineTo(w / 2, h); g.moveTo(0, h / 2); g.lineTo(w, h / 2); g.stroke();
-  g.strokeStyle = 'rgba(40,44,52,0.35)'; g.lineWidth = 3;
-  for (let i = 0; i < 6; i++) { const x = rnd() * w, y = rnd() * h, l = 30 + rnd() * 60; g.beginPath(); g.moveTo(x, y); g.lineTo(x + l, y); g.stroke(); }
-  g.fillStyle = '#30343c';
-  for (const [x, y] of [[18, 18], [w / 2 - 18, 18], [18, h / 2 - 18], [w / 2 - 18, h / 2 - 18]]) for (const [ox, oy] of [[0, 0], [w / 2, 0], [0, h / 2], [w / 2, h / 2]]) { g.beginPath(); g.arc(x + ox, y + oy, 5, 0, 7); g.fill(); }
-});
-// See-through walls: glass panes drawn the way animation draws glass (a frame and two glint strokes). Cut-out, not blended,
-// so they cost the headset almost nothing, and you can watch the whole match through them.
-const latticeArt = () => wtex('lattice', 256, 256, (g, w, h) => {
-  g.clearRect(0, 0, w, h); g.strokeStyle = '#ffffff'; g.fillStyle = '#ffffff'; g.lineCap = 'round';
-  g.lineWidth = 12; g.strokeRect(0, 0, w, h);
-  g.lineWidth = 7; g.beginPath(); g.moveTo(34, 100); g.lineTo(100, 34); g.stroke();
-  g.lineWidth = 5; g.beginPath(); g.moveTo(62, 116); g.lineTo(116, 62); g.stroke();
-  for (const [x, y] of [[0, 0], [w, 0], [0, h], [w, h]]) { g.beginPath(); g.arc(x, y, 15, 0, 7); g.fill(); }
-});
-// The Backrooms: tired yellow wallpaper with a skirting board, damp carpet, and ceiling tiles with humming light panels.
-const wallpaperArt = () => wtex('wallpaper', 512, 512, (g, w, h) => {
-  g.fillStyle = '#ffffff'; g.fillRect(0, 0, w, h);
-  const rnd = seeded(5);
-  for (let x = 0; x < w; x += 64) { g.fillStyle = 'rgba(90,70,10,0.07)'; g.fillRect(x, 0, 30, h); }
-  g.strokeStyle = 'rgba(90,70,10,0.2)'; g.lineWidth = 3;
-  for (let j = 0; j < 8; j++) for (let i = 0; i < 8; i++) { const x = i * 64 + (j % 2 ? 32 : 0) + 15, y = j * 60 + 26; g.beginPath(); g.moveTo(x - 9, y + 6); g.lineTo(x, y - 6); g.lineTo(x + 9, y + 6); g.stroke(); }
-  for (let i = 0; i < 7; i++) { const x = rnd() * w, y = rnd() * h * 0.8, r = 40 + rnd() * 70, gr = g.createRadialGradient(x, y, 0, x, y, r); gr.addColorStop(0, 'rgba(70,50,0,0.12)'); gr.addColorStop(1, 'rgba(70,50,0,0)'); g.fillStyle = gr; g.fillRect(x - r, y - r, r * 2, r * 2); }
-  g.fillStyle = 'rgba(60,45,10,0.5)'; g.fillRect(0, h - 30, w, 30); g.fillStyle = 'rgba(40,30,5,0.6)'; g.fillRect(0, h - 34, w, 5);
-  g.fillStyle = 'rgba(60,45,10,0.3)'; g.fillRect(0, 0, w, 8);
-});
-const carpetArt = () => wtex('carpet', 512, 512, (g, w, h) => {
-  g.fillStyle = '#e4e4e4'; g.fillRect(0, 0, w, h);
-  const rnd = seeded(9);
-  for (let i = 0; i < 9000; i++) { g.fillStyle = rnd() > 0.5 ? 'rgba(0,0,0,0.13)' : 'rgba(255,255,255,0.2)'; g.fillRect(rnd() * w, rnd() * h, 2, 2); }
-  for (let i = 0; i < 9; i++) { const x = rnd() * w, y = rnd() * h, r = 50 + rnd() * 110, gr = g.createRadialGradient(x, y, 0, x, y, r); gr.addColorStop(0, 'rgba(40,30,0,0.2)'); gr.addColorStop(1, 'rgba(40,30,0,0)'); g.fillStyle = gr; g.fillRect(x - r, y - r, r * 2, r * 2); }
-});
-const ceilingArt = () => wtex('ceiling', 512, 512, (g, w, h) => {
-  g.fillStyle = '#a89f84'; g.fillRect(0, 0, w, h);
-  const rnd = seeded(3);
-  for (let i = 0; i < 2500; i++) { g.fillStyle = 'rgba(0,0,0,0.1)'; g.fillRect(rnd() * w, rnd() * h, 2, 2); }
-  for (const [i, j] of [[0, 0], [2, 2]]) { g.fillStyle = '#ffffff'; g.fillRect(i * 128 + 8, j * 128 + 8, 112, 112); g.fillStyle = 'rgba(190,170,90,0.35)'; for (let k = 1; k < 4; k++) g.fillRect(i * 128 + 8 + k * 28, j * 128 + 8, 3, 112); }
-  g.strokeStyle = 'rgba(40,34,18,0.75)'; g.lineWidth = 5; for (let k = 0; k <= 4; k++) { g.beginPath(); g.moveTo(k * 128, 0); g.lineTo(k * 128, h); g.moveTo(0, k * 128); g.lineTo(w, k * 128); g.stroke(); }
-});
-const hazardArt = () => wtex('hazard', 256, 256, (g, w, h) => {
-  g.fillStyle = '#ffd23d'; g.fillRect(0, 0, w, h); g.fillStyle = '#1c1f26';
-  for (let i = -2; i < 6; i++) { g.beginPath(); g.moveTo(i * 64, 0); g.lineTo(i * 64 + 32, 0); g.lineTo(i * 64 + 32 + h, h); g.lineTo(i * 64 + h, h); g.fill(); }
-});
-let toonRamp = null;
-function toonGradient() {
-  if (toonRamp) return toonRamp;
-  const t = new T.DataTexture(new Uint8Array([70, 70, 70, 255, 150, 150, 150, 255, 215, 215, 215, 255, 255, 255, 255, 255]), 4, 1, T.RGBAFormat);
-  t.minFilter = t.magFilter = T.NearestFilter; t.needsUpdate = true;
-  return (toonRamp = t);
-}
-
-// ------------------------------------------------------------------ meshes
-function buildLevelMeshes(scene, env) {
-  const W = WORLD, level = W.level, th = level.theme, group = new T.Group();
-  const buf = () => ({ p: [], n: [], uv: [], c: [] });
-  const B = { hull: buf(), floor: buf(), field: buf(), hazard: buf(), mirror: buf(), ceil: buf() }, rooms = th.art === 'backrooms';
-  const strips = [], col = new T.Color();
-  const zone = z => (level.neutral ? th.strip.mid : z > 2 ? TEAM_COLOR.blue : z < -2 ? TEAM_COLOR.orange : th.strip.mid);
-  const emit = (b, pts, nrm, uvs, color) => { col.set(color); for (const i of [0, 1, 2, 0, 2, 3]) { b.p.push(...pts[i]); b.n.push(...nrm); b.uv.push(...uvs[i]); b.c.push(col.r, col.g, col.b); } };
-  for (const q of W.quads) {
-    const mk = (u, v) => { const p = [0, 0, 0]; p[q.a] = q.k; p[q.ua] = u; p[q.va] = v; return p; };
-    const pts = [mk(q.u0, q.v0), mk(q.u1, q.v0), mk(q.u1, q.v1), mk(q.u0, q.v1)], nrm = [0, 0, 0]; nrm[q.a] = -q.s;
-    const mat = q.mat === 'hull' && q.floor ? 'floor' : q.mat === 'hull' && rooms && q.a === 1 ? 'ceil' : q.mat, scale = mat === 'field' ? 1 / 3 : mat === 'hazard' ? 1 / 3 : 1 / 7;
-    const uvs = [[q.u0, q.v0], [q.u1, q.v0], [q.u1, q.v1], [q.u0, q.v1]].map(([u, v]) => [u * scale, v * scale]);
-    const zc = (q.room.min.z + q.room.max.z) / 2, tint = q.room.tint || (mat === 'floor' ? th.floor : mat === 'field' ? th.field : th.hull);
-    const color = mat === 'hazard' ? '#ffffff' : mat === 'ceil' ? '#fff6cc' : '#' + new T.Color(tint).lerp(new T.Color(zone(zc)), mat === 'field' ? 0.45 : level.neutral ? 0 : 0.07).getHexString();
-    emit(B[mat] || B.hull, pts, nrm, uvs, color);
-  }
-  // light strips along the long floor and ceiling edges of every room; frames round every open window
-  const strip = (a, b, color, s = 0.14) => { const d = [Math.abs(b[0] - a[0]) || s, Math.abs(b[1] - a[1]) || s, Math.abs(b[2] - a[2]) || s]; strips.push({ geo: G.box(...d), pos: [(a[0] + b[0]) / 2, (a[1] + b[1]) / 2, (a[2] + b[2]) / 2], color }); };
-  for (const r of W.rooms) {
-    const alongZ = r.max.z - r.min.z >= r.max.x - r.min.x, zc = (r.min.z + r.max.z) / 2, e = 0.12;
-    for (const sgn of [0, 1]) {
-      const side = alongZ ? (sgn ? r.max.x - e : r.min.x + e) : (sgn ? r.max.z - e : r.min.z + e);
-      const A = y => (alongZ ? [[side, y, r.min.z], [side, y, r.max.z]] : [[r.min.x, y, side], [r.max.x, y, side]]);
-      strip(...A(r.min.y + e), zone(zc)); strip(...A(r.max.y - e), th.strip.white);
-    }
-  }
-  for (const f of W.frames) {
-    const mk = (u, v) => { const p = [0, 0, 0]; p[f.a] = f.k; p[f.ua] = u; p[f.va] = v; return p; }, c = th.strip.accent;
-    strip(mk(f.u0, f.v0), mk(f.u1, f.v0), c, 0.1); strip(mk(f.u0, f.v1), mk(f.u1, f.v1), c, 0.1); strip(mk(f.u0, f.v0), mk(f.u0, f.v1), c, 0.1); strip(mk(f.u1, f.v0), mk(f.u1, f.v1), c, 0.1);
-  }
-  const geo = b => { const g = new T.BufferGeometry(); g.setAttribute('position', new T.Float32BufferAttribute(b.p, 3)); g.setAttribute('normal', new T.Float32BufferAttribute(b.n, 3)); g.setAttribute('uv', new T.Float32BufferAttribute(b.uv, 2)); g.setAttribute('color', new T.Float32BufferAttribute(b.c, 3)); g.computeBoundingSphere(); return g; };
-  const mesh = (b, mat) => { if (!b.p.length) return null; const m = new T.Mesh(geo(b), mat); m.frustumCulled = false; group.add(m); return m; };
-  const toon = (extra = {}) => new T.MeshToonMaterial({ vertexColors: true, map: panelArt(), gradientMap: toonGradient(), side: T.DoubleSide, ...extra });
-  const mats = {};
-  mats.hull = th.shiny ? new T.MeshStandardMaterial({ vertexColors: true, map: panelArt(), metalness: 0.95, roughness: 0.1, envMap: env, envMapIntensity: 1.25, side: T.DoubleSide }) : toon(rooms ? { map: wallpaperArt() } : {});
-  mats.floor = th.shiny ? mats.hull : toon(rooms ? { map: carpetArt() } : {});
-  mats.ceil = new T.MeshBasicMaterial({ vertexColors: true, map: ceilingArt(), side: T.DoubleSide, toneMapped: false });
-  mats.field = new T.MeshBasicMaterial({ vertexColors: true, map: latticeArt(), alphaTest: 0.2, alphaToCoverage: true, side: T.DoubleSide, toneMapped: false, fog: !!th.fogWalls });
-  mats.hazard = new T.MeshToonMaterial({ map: hazardArt(), gradientMap: toonGradient(), side: T.DoubleSide });
-  mesh(B.hull, mats.hull); mesh(B.floor, mats.floor); mesh(B.field, mats.field); mesh(B.hazard, mats.hazard); mesh(B.mirror, mats.hull); mesh(B.ceil, mats.ceil);
-  // blocks and the penalty box
-  const blockParts = [], binParts = [];
-  for (const b of W.blocks) {
-    const s = b.max.clone().sub(b.min), c = b.min.clone().add(b.max).multiplyScalar(0.5);
-    blockParts.push({ geo: G.box(s.x, s.y, s.z), pos: c.toArray(), color: b.style === 'hazard' ? '#ffd23d' : (b.style || th.block || th.hull) });
-    if (b.style === 'hazard') for (let k = -2; k <= 2; k++) strips.push({ geo: G.box(s.x > s.z ? 0.5 : s.x + 0.04, s.y * 0.8, s.x > s.z ? s.z + 0.04 : 0.5), pos: [c.x + (s.x > s.z ? k * s.x / 5.5 : 0), c.y, c.z + (s.x > s.z ? 0 : k * s.z / 5.5)], color: '#1c1f26' });
-  }
-  if (blockParts.length) { const m = new T.Mesh(mergeParts(blockParts), new T.MeshToonMaterial({ vertexColors: true, gradientMap: toonGradient(), map: rooms ? wallpaperArt() : null })); group.add(m); }
-  if (W.bin) {
-    const { min: m, max: M, c } = W.bin, e = 0.1, cb = '#ff4f6a';
-    for (const y of [m.y, M.y]) { strip([m.x, y, m.z], [M.x, y, m.z], cb, e); strip([m.x, y, M.z], [M.x, y, M.z], cb, e); strip([m.x, y, m.z], [m.x, y, M.z], cb, e); strip([M.x, y, m.z], [M.x, y, M.z], cb, e); }
-    for (const x of [m.x, M.x]) for (const z of [m.z, M.z]) strip([x, m.y, z], [x, M.y, z], cb, e);
-    const fb = buf(), sz = M.clone().sub(m);
-    const face = (pts, nrm) => emit(fb, pts, nrm, [[0, 0], [pts[1][0] - pts[0][0] + pts[1][2] - pts[0][2], 0], [1, 1], [0, 1]].map((u, i) => [[0, 0], [1, 0], [1, 1], [0, 1]][i].map((v, k) => v * (k ? sz.y : Math.max(sz.x, sz.z)) / 3)), cb);
-    face([[m.x, m.y, m.z], [M.x, m.y, m.z], [M.x, M.y, m.z], [m.x, M.y, m.z]], [0, 0, 1]); face([[m.x, m.y, M.z], [M.x, m.y, M.z], [M.x, M.y, M.z], [m.x, M.y, M.z]], [0, 0, -1]);
-    face([[m.x, m.y, m.z], [m.x, m.y, M.z], [m.x, M.y, M.z], [m.x, M.y, m.z]], [1, 0, 0]); face([[M.x, m.y, m.z], [M.x, m.y, M.z], [M.x, M.y, M.z], [M.x, M.y, m.z]], [-1, 0, 0]);
-    mesh(fb, mats.field);
-    binParts.push({ geo: G.box(sz.x, 0.2, sz.z), pos: [c.x, m.y - 0.1, c.z], color: '#2a2030' }, { geo: G.box(sz.x, 0.2, sz.z), pos: [c.x, M.y + 0.1, c.z], color: '#2a2030' });
-    group.add(new T.Mesh(mergeParts(binParts), new T.MeshToonMaterial({ vertexColors: true, gradientMap: toonGradient() })));
-    const tag = labelSprite('PENALTY BOX', { color: '#ffffff', bg: 'rgba(255,79,106,0.7)', height: 1.4 }); tag.position.set(c.x, M.y + 1.6, c.z); group.add(tag);
-  }
-  // goals: frame with a round opening, a glowing rim in the defending team's color, a recess going back into the wall
-  const goalParts = [], goalGlow = [];
-  for (const g of W.goals) {
-    const c = TEAM_COLOR[g.team], side = g.r + 0.45, shape = new T.Shape();
-    shape.moveTo(-side, -side); shape.lineTo(side, -side); shape.lineTo(side, side); shape.lineTo(-side, side); shape.lineTo(-side, -side);
-    const hole = new T.Path(); hole.absarc(0, 0, g.r, 0, Math.PI * 2, true); shape.holes.push(hole);
-    const q = new T.Quaternion().setFromUnitVectors(new T.Vector3(0, 0, 1), g.n), e = new T.Euler().setFromQuaternion(q), rot = [e.x / DEG, e.y / DEG, e.z / DEG];
-    const at = d => g.c.clone().addScaledVector(g.n, d).toArray();
-    goalParts.push({ geo: new T.ShapeGeometry(shape, 24), pos: at(0.02), rot, color: '#262a34' },
-                   { geo: new T.CylinderGeometry(g.r, g.r, 2.4, 28, 1, true).rotateX(Math.PI / 2), pos: at(-1.2), rot, color: '#12151c' }, { geo: new T.CircleGeometry(g.r, 28), pos: at(-2.4), rot, color: '#0a0c12' });
-    goalGlow.push({ geo: G.torus(g.r, g.kind === 'deep' ? 0.18 : 0.13, 8, 44), pos: at(0.04), rot, color: c }, { geo: G.torus(g.r * 0.98, 0.05, 4, 36), pos: at(-0.9), rot, color: c }, { geo: G.torus(g.r * 0.98, 0.05, 4, 36), pos: at(-1.8), rot, color: c });
-    for (let i = 0; i < 8; i++) { const a = i / 8 * Math.PI * 2, o = new T.Vector3(Math.cos(a) * (side - 0.14), Math.sin(a) * (side - 0.14), 0.05).applyQuaternion(q); goalGlow.push({ geo: G.box(0.12, 0.12, 0.05), pos: g.c.clone().add(o).toArray(), rot, color: '#ffffff' }); }
-    const tag = labelSprite(g.kind === 'deep' ? 'DEEP GOAL  3' : '1', { color: '#ffffff', bg: hexA(c, 0.65), height: g.kind === 'deep' ? 0.8 : 0.65 });
-    const up = Math.abs(g.n.y) > 0.9 ? new T.Vector3(0, 0, g.c.z > 0 ? -1 : 1) : new T.Vector3(0, 1, 0);
-    tag.position.copy(g.c).addScaledVector(g.n, 0.6).addScaledVector(up, g.r + 1); group.add(tag);
-  }
-  const goalMesh = new T.Mesh(mergeParts(goalParts), new T.MeshToonMaterial({ vertexColors: true, gradientMap: toonGradient(), side: T.DoubleSide }));
-  const goalGlowMesh = glowing(goalGlow); group.add(goalMesh, goalGlowMesh);
-  const stripMesh = glowing(strips); stripMesh.frustumCulled = false; group.add(stripMesh);
-  // The Mirror Vault: the level's own skeleton of light, repeated in every direction like a hall of mirrors (first the mirror
-  // image just past each edge of the field, then a fainter copy beyond that), so the place seems to go on forever.
-  if (th.mirrors) {
-    const Bn = W.bounds, size = Bn.max.clone().sub(Bn.min);
-    const ghost = o => new T.MeshBasicMaterial({ vertexColors: true, transparent: true, opacity: o, depthWrite: false, toneMapped: false, side: T.DoubleSide, fog: false });
-    const near = ghost(0.42), far = ghost(0.17);
-    for (const ax of ['x', 'y', 'z']) for (const sgn of [1, -1]) {
-      const a = new T.Mesh(stripMesh.geometry, near); a.scale[ax] = -1; a.position[ax] = 2 * (sgn > 0 ? Bn.max[ax] : Bn.min[ax]); a.frustumCulled = false; a.renderOrder = -1; group.add(a);
-      const b = new T.Mesh(stripMesh.geometry, far); b.position[ax] = sgn * 2 * size[ax]; b.frustumCulled = false; b.renderOrder = -1; group.add(b);
-    }
-  }
-  // big painted words on the floors (one atlas, one mesh)
-  const decals = buildDecals(level); if (decals) group.add(decals);
-  // the SIGHT RING
-  const sight = new T.Group(); sight.position.set(...level.sight);
-  const ringMat = new T.MeshBasicMaterial({ color: '#e8f4ff', transparent: true, opacity: 0.85, toneMapped: false });
-  const sightRings = [1.0, 1.18, 1.36].map((r, i) => { const m = new T.Mesh(new T.TorusGeometry(r, 0.035, 6, 64), ringMat); m.rotation.set(i * 1.1, i * 0.7, 0); sight.add(m); return m; });
-  const sightGlow = glowSprite('#9ff6ff', 2.6, 0.3); sight.add(sightGlow);
-  const sightTag = labelSprite('SIGHT RING', { color: '#e8f4ff', bg: 'rgba(8,18,31,0.5)', height: 0.32 }); sightTag.position.y = 1.9; sight.add(sightTag);
-  group.add(sight);
-  scene.add(group);
-  return { group, sight, sightRings, sightGlow, ringMat, stripMesh, mats };
-}
-
-// Stencilled words on floors and walls: every label is painted into one atlas texture and drawn by one mesh.
-function buildDecals(level) {
-  const list = [];
-  for (const r of WORLD.rooms) if (r.label) list.push({ text: r.label, c: [(r.min.x + r.max.x) / 2, r.min.y + WALL_T / 2 + 0.04, (r.min.z + r.max.z) / 2], w: Math.min(r.max.x - r.min.x, r.max.z - r.min.z) * 0.7, alongZ: r.max.z - r.min.z > r.max.x - r.min.x, color: level.theme.decal });
-  if (!list.length) return null;
-  const cv = document.createElement('canvas'); cv.width = 1024; cv.height = 1024;
-  const g = cv.getContext('2d'), rows = Math.max(4, list.length), rh = 1024 / rows, P = [], N = [], U = [];
-  g.clearRect(0, 0, 1024, 1024); g.textAlign = 'center'; g.textBaseline = 'middle';
-  const uniq = [...new Set(list.map(l => l.text))];
-  uniq.forEach((text, i) => { g.fillStyle = '#ffffff'; let px = rh * 0.78; g.font = `900 ${px}px ${UI_FONT}`; const tw = g.measureText(text).width; if (tw > 980) { px *= 980 / tw; g.font = `900 ${px}px ${UI_FONT}`; } g.fillText(text, 512, rh * (i + 0.5)); });
-  for (const l of list) {
-    const i = uniq.indexOf(l.text), v0 = 1 - (i + 1) / rows, v1 = 1 - i / rows, hw = l.w / 2, hh = l.w * (rh / 1024) / 2 * 1.0;
-    const pts = l.alongZ ? [[l.c[0] - hh, l.c[1], l.c[2] + hw], [l.c[0] - hh, l.c[1], l.c[2] - hw], [l.c[0] + hh, l.c[1], l.c[2] - hw], [l.c[0] + hh, l.c[1], l.c[2] + hw]]
-                         : [[l.c[0] - hw, l.c[1], l.c[2] + hh], [l.c[0] + hw, l.c[1], l.c[2] + hh], [l.c[0] + hw, l.c[1], l.c[2] - hh], [l.c[0] - hw, l.c[1], l.c[2] - hh]];
-    const uvs = [[0, v0], [1, v0], [1, v1], [0, v1]];
-    for (const k of [0, 1, 2, 0, 2, 3]) { P.push(...pts[k]); N.push(0, 1, 0); U.push(...uvs[k]); }
-  }
-  const tex = new T.CanvasTexture(cv); if ('colorSpace' in tex) tex.colorSpace = T.SRGBColorSpace; tex.anisotropy = 8;
-  if (!UI.fontReady) UI.panels.add({ set dirty(v) { if (v) { g.clearRect(0, 0, 1024, 1024); uniq.forEach((text, i) => { let px = rh * 0.78; g.font = `900 ${px}px ${UI_FONT}`; const tw = g.measureText(text).width; if (tw > 980) { px *= 980 / tw; g.font = `900 ${px}px ${UI_FONT}`; } g.fillStyle = '#ffffff'; g.fillText(text, 512, rh * (i + 0.5)); }); tex.needsUpdate = true; } } });
-  const geo = new T.BufferGeometry(); geo.setAttribute('position', new T.Float32BufferAttribute(P, 3)); geo.setAttribute('normal', new T.Float32BufferAttribute(N, 3)); geo.setAttribute('uv', new T.Float32BufferAttribute(U, 2));
-  const m = new T.Mesh(geo, new T.MeshBasicMaterial({ map: tex, color: level.theme.decal, transparent: true, opacity: 0.55, depthWrite: false, toneMapped: false, polygonOffset: true, polygonOffsetFactor: -2 }));
-  m.renderOrder = 1; m.frustumCulled = false;
-  return m;
-}

@@ -10,12 +10,22 @@ const TRAIN5 = {
     this.ally = this.bots.find(b => b.team === 'blue'); this.rival = this.bots.find(b => b.team === 'orange');
     this.matchBots = [];
     this.realLevel = this.realLevel || this.level; this.level = LEVELS[0];     // the training rival is always a rookie
+    // Training teaches point-and-trigger, so it always runs with easy reach and hands-steer, whatever your settings say.
+    // (With full-motion arms saved from an older version, "point at the CORE and hold the trigger" did nothing: you were stuck.)
+    if (!this.trainKeep) this.trainKeep = { easy: this.easy, flight: this.flight, mode: this.mode };
+    this.easy = true; this.flight = 'hands'; this.mode = 'rugby';
     this.placePlayer(0, 9, 30, 0);
     this.dropBall();
     this.training = { step: -1, t: 0 };
     this.nextStep();
   },
-  leaveTraining() { if (this.realLevel) { this.level = this.realLevel; this.realLevel = null; } this.training = null; this.target.visible = false; },
+  leaveTraining() {
+    if (this.realLevel) { this.level = this.realLevel; this.realLevel = null; }
+    if (this.trainKeep) { this.easy = this.trainKeep.easy; this.flight = this.trainKeep.flight; this.mode = this.trainKeep.mode; this.trainKeep = null; }
+    this.training = null; this.target.visible = false;
+  },
+  // Y, then SKIP THIS STEP: nobody gets stuck in training. (Skipping still earns the license: the point is that you saw it all.)
+  skipStep() { const tr = this.training; if (!tr) return; if (this.ruck) this.endRuck('offload'); this.ruck = null; for (const d of [...this.duels]) this.endDuel(d, null); this.playerBin = 0; tr.doneT = 0; this.flash('Skipped.', 0.6); this.nextStep(); },
   dropBall() { const d = this.ball; d.holder = null; d.passTo = null; d.pos.set(0, -50, 0); d.vel.set(0, 0, 0); },
   ringAt(x, y, z) { this.target.position.set(x, y, z); this.target.rotation.set(0, 0, 0); this.target.visible = true; },
   aheadOf(dist, y) {
@@ -45,14 +55,14 @@ const TRAIN5 = {
     { id: 'grab', vr: 'This is the CORE. Point at it and HOLD THE TRIGGER to pull it into your hand.', pc: 'This is the CORE. Look at it and hold G to pull it in.', hint: 'grab',
       setup(g) { const { p } = g.aheadOf(7, 9); const d = g.ball; d.pos.copy(p); d.vel.set(0, 0, 0); d.holder = null; d.passTo = null; }, done: g => g.ball.holder === 'player' },
     { id: 'throw', vr: 'TAP the trigger for a soft throw. HOLD it and the ring round the CORE grows: a hard throw. Fly to the gold ring, point at a round hole in the ORANGE wall, hold, let go.', pc: 'Tap Space for a soft throw, hold it for a hard one. Fly to the gold ring, look at a round hole and throw.', hint: 'throw', back: 'player',
-      setup(g) { g.ringAt(0, 9, -30); }, done: g => { const sc = g.training.scored; if (sc && sc.team !== 'orange') g.training.scored = null; return !!sc && sc.team === 'orange'; } },
+      setup(g) { g.ringAt(0, 9, -30); g.training.tries = 0; }, done: g => { const sc = g.training.scored; if (sc && sc.team !== 'orange') g.training.scored = null; return (!!sc && sc.team === 'orange') || g.training.tries >= 5; } },
     { id: 'pass', vr: 'A teammate is open. Point at them and TAP the trigger. Letting go while you point at a teammate is always a pass.', pc: 'A teammate is open. Press F to pass.', hint: 'pass', back: 'player',
       setup(g) { g.target.visible = false; g.spawnTrainee(g.ally, 10); g.givePlayerBall(); }, done: g => g.ball.holder === g.ally },
     { id: 'call', vr: 'Now THEY have it. Press X to CALL FOR A PASS and it comes straight to your hand.', pc: 'Now THEY have it. Press C to call for a pass.', hint: 'call', back: 'ally',
       setup(g) { g.callT = 0; if (g.ball.holder !== g.ally) g.takeBall(g.ally); }, done: g => g.ball.holder === 'player' },
     { id: 'ruck', vr: 'ORANGE has the CORE. Fly straight into them: that is a RUCK. Now SQUEEZE every trigger and grip. More fingers, more strength. Flutter the triggers to strip it.', pc: 'ORANGE has the CORE. Fly into them to start a RUCK, then hold G and Space and tap them fast.', hint: 'ruck', back: 'rival',
       setup(g) { g.ally.obj.visible = false; g.ally.reach.visible = false; g.dropBall(); g.spawnTrainee(g.rival, 14); g.takeBall(g.rival); g.rival.grace = 0; }, done: g => g.ball.holder === 'player' && !g.ruck },
-    { id: 'punch', vr: 'FIGHTS. ORANGE isn\'t carrying now. Make a fist (hold a GRIP) and swing it into their chest, three times. When they flash red they are about to hit: glove in front of your face, or duck.', pc: 'FIGHTS. Fly next to ORANGE and press X to punch, three times. Hold G to block.', hint: 'punch', back: 'ally', hold: 2.8,
+    { id: 'punch', vr: 'FIGHTS. ORANGE isn\'t carrying now. Make a fist (hold a GRIP) and swing it into their chest until they are knocked out. When they flash red they are about to hit: glove in front of your face, or move your head.', pc: 'FIGHTS. Fly next to ORANGE and press X to punch until they are knocked out. Hold G to block.', hint: 'punch', back: 'ally', hold: 2.8,
       setup(g) { g.spawnTrainee(g.rival, 4.5); g.spawnTrainee(g.ally, 4.5, true); g.ally.pos.x += g.ally.pos.x > 0 ? -6 : 6; g.ally.target.copy(g.ally.pos); g.takeBall(g.ally); g.training.fought = false; },
       done: g => { if (g.inDuel('player')) g.training.fought = true; if (g.playerBin > 4) { g.playerBin = 4; g.flash('This is the PENALTY BOX. Lose a fight and you sit here and watch.', 3.5, { color: '#ff4f6a' }); } return g.training.fought && !g.inDuel('player') && !(g.playerBin > 0); } },
     { id: 'rear', vr: 'Someone is behind you. HOLD the RIGHT STICK down: a mirror shows what is back there. Hold it for a moment.', pc: 'Someone is behind you. Hold V to look in your mirror.', hint: 'rear',
@@ -69,21 +79,31 @@ const TRAIN5 = {
       setup(g) { g.grantLicense(); }, done: (g, inp) => inp.start || g.training.t > 25 }
   ],
   grantLicense() {
-    const first = !this.save.licensed;
-    this.save.licensed = true; this.save.briefed5 = true; writeSave(this.save); this.buildPlayerRide(); this.menuKey = '';
+    const first = !this.pilot().licensed;
+    this.pilot().licensed = true; this.pilot().briefed = true; writeSave(this.save); this.buildPlayerRide(); this.menuKey = '';
     if (first) { beep(523, 160, 0.1); beep(659, 160, 0.1, 'sine', 0.15); beep(784, 160, 0.1, 'sine', 0.3); beep(1047, 400, 0.12, 'sine', 0.45); for (const h of this.hands || []) pulse(h, 1, 400); this.bursts.fire(this.headPos.clone().addScaledVector(this.headFwd, 2.5), '#ffd166', 1.2); }
   },
   nextStep() {
-    const tr = this.training; tr.step++; tr.t = 0; tr.loose = 0; tr.scored = null; tr.doneT = 0;
+    const tr = this.training; tr.step++; tr.t = 0; tr.loose = 0; tr.scored = null; tr.doneT = 0; tr.nagged = false;
     const s = this.TRAINING5[tr.step];
     if (!s) { this.resetToMenu(); return; }
     s.setup(this);
+    this.showStep();
+  },
+  showStep() {
+    const tr = this.training, s = tr && this.TRAINING5[tr.step]; if (!s) return;
     this.flash(`${tr.step + 1} / ${this.TRAINING5.length}   ${this.inVR ? s.vr : s.pc}`, 999, { hint: this.inVR && s.hint ? TIP_HINTS[s.hint] : null, color: s.id === 'done' ? '#ffd166' : '#9ff6ff' });
   },
   updateTraining(inp, dt) {
     const tr = this.training; if (!tr) return;
     tr.t += dt;
     const s = this.TRAINING5[tr.step], d = this.ball;
+    // half a minute on one step: say how to get past it, then put the instruction back
+    if (!tr.nagged && tr.t > 35 && s.id !== 'done' && !this.ruck && !this.inDuel('player')) {
+      tr.nagged = true; tr.nagT = 6;
+      this.flash(this.inVR ? 'Stuck? Press Y (left controller), then SKIP THIS STEP.' : 'Stuck? Press P, then SKIP THIS STEP.', 6, { color: '#ffd166', hint: this.inVR ? TIP_HINTS.pause : null });
+    }
+    if (tr.nagT > 0 && (tr.nagT -= dt) <= 0) this.showStep();
     // the trainees: the teammate hovers and watches you; the rival drifts slowly away while it carries the core
     for (const b of this.matchBots) {
       b.stun = Math.max(0, b.stun - dt); b.grace = Math.max(0, b.grace - dt); b.cool = Math.max(0, b.cool - dt); b.reachT = Math.max(0, (b.reachT || 0) - dt);
@@ -103,7 +123,7 @@ const TRAIN5 = {
       tr.loose += dt;
       if (tr.loose > 3.2 && !tr.scored) {
         tr.loose = 0;
-        if (s.back === 'player') { this.givePlayerBall(); this.flash(s.id === 'throw' ? 'Try again: point at a round hole in the ORANGE wall, hold the trigger, let go.' : 'Try again: point at your teammate and tap the trigger.', 3, { color: '#9ff6ff' }); }
+        if (s.back === 'player') { tr.tries = (tr.tries || 0) + 1; this.givePlayerBall(); this.flash(s.id === 'throw' ? 'Try again: point at a round hole in the ORANGE wall, hold the trigger, let go.' : 'Try again: point at your teammate and tap the trigger.', 3, { color: '#9ff6ff' }); }
         else if (this[s.back].obj.visible && !(this[s.back].bin > 0)) this.takeBall(this[s.back]);
       }
     } else tr.loose = 0;

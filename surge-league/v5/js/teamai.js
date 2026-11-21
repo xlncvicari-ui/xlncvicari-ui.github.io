@@ -30,9 +30,9 @@ const TEAMAI = {
   },
 
   // A point given for blue's end, turned to this team's end.
-  forTeam(team, p) { return new T.Vector3(...(team === 'blue' ? p : toOrange(WORLD.level, p))); },
+  forTeam(team, p) { const v = new T.Vector3(...(team === 'blue' ? p : toOrange(WORLD.level, p))); v.y += WORLD.oy; return v; },
   // Blue's lanes are written attacking -z; orange flies the mirror image.
-  laneVia(team, lane) { return new T.Vector3(...(team === 'blue' ? lane.via : toOrange(WORLD.level, lane.via))); },
+  laneVia(team, lane) { return this.forTeam(team, lane.via); },
   goalsOf(team, kind) { return WORLD.goals.filter(g => g.team === team && (!kind || g.kind === kind)); },
   shotSpot(team, kind) {
     const gs = this.goalsOf(OTHER[team], kind), g = gs[Math.floor(gs.length / 2)] || this.goalsOf(OTHER[team])[0];
@@ -83,20 +83,22 @@ const TEAMAI = {
     return true;
   },
   // Bigger = closer to scoring for this team (straight-line to where the team is trying to shoot from).
-  progressOf(team, p) { const br = this.brains[team], spot = br.route ? br.route.spot : this.shotSpot(team, 'hole'); return -p.distanceTo(spot); },
+  progressOf(team, p) { if (!WORLD.goals.length) return 0; const br = this.brains[team], spot = br.route ? br.route.spot : this.shotSpot(team, 'hole'); return -p.distanceTo(spot); },
   free(a) { return a === 'player' ? !(this.playerBin > 0 || this.inDuel('player') || this.inRuck('player')) : !(a.bin > 0 || a.duel || a.ruck || a.stun > 0); },
 
   // ---------------------------------------------------------------- per-frame
   updateBots(dt, live) {
     const d = this.ball, holderTeam = d.holder ? this.teamOf(d.holder) : d.passTo ? this.teamOf(d.passTo) : null;
-    if (live) for (const team of ['blue', 'orange']) this.thinkTeam(team, holderTeam, dt);
+    const control = this.mode === 'control';
+    if (live) for (const team of ['blue', 'orange']) { if (control) this.thinkControl(team, dt); else this.thinkTeam(team, holderTeam, dt); }
+    if (live && control) this.updateControlBots(dt);
     for (const b of this.matchBots) {
       b.stun = Math.max(0, b.stun - dt); b.cool = Math.max(0, b.cool - dt); b.grace = Math.max(0, b.grace - dt); b.dashCool = Math.max(0, b.dashCool - dt); b.dashT = Math.max(0, b.dashT - dt);
       b.reachT = Math.max(0, (b.reachT || 0) - dt);
       if (b.bin > 0 || b.duel || b.ruck) { b.vel.set(0, 0, 0); continue; }
       if (!live) { b.vel.multiplyScalar(Math.exp(-3 * dt)); b.pos.addScaledVector(b.vel, dt); constrainSphere(b.pos, b.vel, BOT_R, 0.3); continue; }
       if (b.stun > 0) { b.vel.multiplyScalar(Math.exp(-2 * dt)); b.pos.addScaledVector(b.vel, dt); constrainSphere(b.pos, b.vel, BOT_R, 0.4); continue; }
-      if (d.holder === b) this.carrierThink(b, dt); else this.catchCheck(b, dt);
+      if (d.holder !== b) this.catchCheck(b, dt); else if (control) this.carrierControl(b, dt); else this.carrierThink(b, dt);
       this.steerBot(b, dt);
     }
   },
@@ -222,9 +224,12 @@ const TEAMAI = {
   // Loose core: snap it up within arm's reach; the nearest chaser also pulls it in from your pull range.
   catchCheck(b, dt) {
     const d = this.ball;
-    if (d.holder || d.noCatch > 0 || b.cool > 0) return;
+    if (d.holder || b.cool > 0) return;
     const hand = b.pos.clone().add(new T.Vector3(0, 1.1, 0)), dist = hand.distanceTo(d.pos);
+    // The rider a pass is meant for takes it the moment it arrives. (Until 2026-11-21 nobody could catch for 0.4 s after you
+    // let go, so a pass to a teammate closer than about 10 m flew straight through them. That also broke training's pass step.)
     if (d.passTo === b && dist < BOT_REACH + 0.6) { b.reachT = 0.25; return this.takeBall(b); }
+    if (d.noCatch > 0) return;
     if (d.passTo && this.teamOf(d.passTo) === b.team) return;
     if (!d.passTo && d.lastThrower && this.teamOf(d.lastThrower) === b.team && this.time - d.throwT < 1.5) return;   // never block your own team's shot
     if (dist < BOT_REACH) {
@@ -240,7 +245,7 @@ const TEAMAI = {
   steerBot(b, dt) {
     const d = this.ball, isCarrier = d.holder === b, brain = this.brains[b.team];
     let goal = b.target;
-    if (isCarrier) {
+    if (isCarrier && this.mode !== 'control') {
       if (!brain.route) brain.route = this.planRoute(b.team, brain.main, b.pos);
       goal = this.routePoint(brain.route, b.pos, 1) || brain.route.spot;
       if (b.pos.distanceTo(brain.route.spot) < 6 || clearLine(b.pos, brain.route.spot, BOT_R)) goal = brain.route.spot;

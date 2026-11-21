@@ -41,6 +41,38 @@ const SKY_PAINT = {
     for (let i = 0; i < 900; i++) { g.fillStyle = rnd() > 0.6 ? '#ffb347' : '#fff0d0'; g.globalAlpha = 0.25 + rnd() * 0.6; g.fillRect(rnd() * w, rnd() * h, 1.6, 1.6); }
     g.globalAlpha = 1; for (let i = 0; i < 24; i++) sparkle(g, rnd() * w, rnd() * h * 0.8, 4 + rnd() * 8, '#ffd9a0');
   },
+  // The Endless Chasm: almost black violet, with faint shards of polygon light.
+  abyss(g, w, h, rnd) {
+    const bg = g.createLinearGradient(0, 0, 0, h); bg.addColorStop(0, '#0c0724'); bg.addColorStop(0.5, '#150b38'); bg.addColorStop(1, '#0c0724');
+    g.fillStyle = bg; g.fillRect(0, 0, w, h);
+    const cols = ['#7ff6ff', '#ff9ae6', '#c8b6ff'];
+    for (let i = 0; i < 90; i++) {
+      const x = rnd() * w, y = rnd() * h, s = 10 + rnd() * 46, n = 3 + Math.floor(rnd() * 4), a0 = rnd() * 7;
+      g.strokeStyle = cols[i % 3]; g.globalAlpha = 0.08 + rnd() * 0.2; g.lineWidth = 1.5; g.beginPath();
+      for (let k = 0; k <= n; k++) g.lineTo(x + Math.cos(a0 + k / n * Math.PI * 2) * s, y + Math.sin(a0 + k / n * Math.PI * 2) * s * 0.8);
+      g.stroke();
+    }
+    g.globalAlpha = 1; for (let i = 0; i < 30; i++) sparkle(g, rnd() * w, rnd() * h, 3 + rnd() * 6, cols[i % 3]);
+  },
+  // Sky Gardens: a soft morning sky, deep teal overhead down to peach, with banks of cloud in flat cel colors.
+  garden(g, w, h, rnd) {
+    const bg = g.createLinearGradient(0, 0, 0, h); bg.addColorStop(0, '#123a5a'); bg.addColorStop(0.3, '#2f7f9a'); bg.addColorStop(0.5, '#8fd0c8'); bg.addColorStop(0.62, '#ffd9b8'); bg.addColorStop(0.8, '#e8a8a0'); bg.addColorStop(1, '#3a5a7a');
+    g.fillStyle = bg; g.fillRect(0, 0, w, h);
+    blobBand(g, w, h, rnd, ['#ffffffcc', '#ffeedd', '#ffc8b8aa'], 0.6, 0.035, 40, 58);
+    blobBand(g, w, h, rnd, ['#ffffff88', '#d8f4f0aa'], 0.4, 0.05, 26, 40);
+    blobBand(g, w, h, rnd, ['#f6b8c8aa', '#c890b8aa'], 0.78, 0.04, 34, 66);
+    for (let i = 0; i < 260; i++) { g.fillStyle = '#ffffff'; g.globalAlpha = 0.25 + rnd() * 0.5; g.fillRect(rnd() * w, rnd() * h * 0.28, 1.5, 1.5); }
+    g.globalAlpha = 1; for (let i = 0; i < 12; i++) sparkle(g, rnd() * w, rnd() * h * 0.25, 4 + rnd() * 6, '#ffffff');
+  },
+  // The Carousel: dusk. Plum overhead, a band of orange and gold, lantern-colored clouds.
+  dusk(g, w, h, rnd) {
+    const bg = g.createLinearGradient(0, 0, 0, h); bg.addColorStop(0, '#1a1036'); bg.addColorStop(0.36, '#5a2a6a'); bg.addColorStop(0.52, '#e0705a'); bg.addColorStop(0.6, '#ffc870'); bg.addColorStop(0.72, '#8a3a5a'); bg.addColorStop(1, '#1a1030');
+    g.fillStyle = bg; g.fillRect(0, 0, w, h);
+    blobBand(g, w, h, rnd, ['#7a3a7a', '#c0506a', '#ffb070aa'], 0.56, 0.04, 42, 56);
+    blobBand(g, w, h, rnd, ['#3a2058', '#5a2a6aaa'], 0.36, 0.06, 30, 60);
+    for (let i = 0; i < 900; i++) { g.fillStyle = rnd() > 0.7 ? '#ffe9c0' : '#ffffff'; g.globalAlpha = 0.3 + rnd() * 0.6; g.fillRect(rnd() * w, rnd() * h * 0.4, 1.4, 1.4); }
+    g.globalAlpha = 1; for (let i = 0; i < 26; i++) sparkle(g, rnd() * w, rnd() * h * 0.36, 4 + rnd() * 8, i % 2 ? '#ffe9c0' : '#ffffff');
+  },
   void(g, w, h) { const bg = g.createLinearGradient(0, 0, 0, h); bg.addColorStop(0, '#2a2410'); bg.addColorStop(1, '#161208'); g.fillStyle = bg; g.fillRect(0, 0, w, h); },
   prism(g, w, h, rnd) {
     g.fillStyle = '#05040c'; g.fillRect(0, 0, w, h);
@@ -145,10 +177,20 @@ function buildBackdrop(scene, level) {
     const pts = new T.Points(geo, new T.PointsMaterial({ size: 0.35, map: dotTexture(), color: '#ffb347', transparent: true, depthWrite: false, blending: T.AdditiveBlending, toneMapped: false })); pts.frustumCulled = false; group.add(pts);
     updates.push(dt => { const p = geo.attributes.position; for (let i = 0; i < n; i++) { let y = p.getY(i) + dt * (1.5 + (i % 5) * 0.5); if (y > B.max.y) y = B.min.y; p.setY(i, y); } p.needsUpdate = true; });
     updates.push(dt => { sun.rotation.y += dt * 0.01; });
-  } else if (th.sky === 'prism') {
+  } else if (th.sky === 'garden') {
+    const world = planetMesh(620, ['#3f9a8a', '#58b89a', '#2f7f9a', '#e8f4ee', '#7fc8a8', '#ffffff']); world.position.set(180, -900, -200); world.rotation.z = 0.2; group.add(world);
+    const moon = planetMesh(80, ['#ffd9c8', '#f6b8c8', '#ffeedd']); moon.position.set(-560, 420, -640); group.add(moon);
+    const sun = glowSprite('#fff2d0', 300, 0.95); sun.position.set(700, 620, -560); group.add(sun);
+    updates.push(dt => { world.rotation.y += dt * 0.003; });
+  } else if (th.sky === 'dusk') {
+    const planet = planetMesh(340, ['#ffb070', '#e0705a', '#ffd9a0', '#c0506a']); planet.position.set(-480, 120, -860); planet.rotation.z = 0.3; group.add(planet);
+    const ring = ringMesh(430, 660, '#ffe9c0'); ring.position.copy(planet.position); ring.rotation.set(1.2, -0.3, 0.3); group.add(ring);
+    const sun = glowSprite('#ffc870', 380, 0.9); sun.position.set(-760, 60, 760); group.add(sun);
+    updates.push(dt => { ring.rotation.z += dt * 0.008; });
+  } else if (th.sky === 'prism' || th.sky === 'abyss') {
     // the mirrored shell: a twelve-sided frame, then the same frame again and again further out, fading (the "reflections")
     const frame = r => new T.LineSegments(new T.EdgesGeometry(new T.DodecahedronGeometry(r, 0)), new T.LineBasicMaterial({ color: '#c8b6ff', transparent: true, opacity: 1, toneMapped: false, fog: false }));
-    const span = Math.max(B.max.x, B.max.z, B.max.y) * 1.35;
+    const span = Math.max(B.max.x, B.max.z, th.sky === 'abyss' ? 0 : B.max.y) * (th.sky === 'abyss' ? 2.2 : 1.35);
     const shells = [1, 1.5, 2.2, 3.2, 4.6, 6.6].map((k, i) => { const f = frame(span * k); f.material.opacity = 0.9 / (1 + i * 0.9); f.material.color.set(i % 2 ? '#7ff6ff' : '#c8b6ff'); f.position.y = (B.min.y + B.max.y) / 2; f.rotation.set(i * 0.31, i * 0.52, 0); group.add(f); return f; });
     updates.push(dt => shells.forEach((f, i) => { f.rotation.y += dt * 0.02 * (i % 2 ? 1 : -1) / (1 + i * 0.4); f.rotation.x += dt * 0.008; }));
   } else if (th.sky === 'void') {
@@ -159,7 +201,7 @@ function buildBackdrop(scene, level) {
     const pts = new T.Points(geo, new T.PointsMaterial({ size: 3.2, map: dotTexture(), color: '#fff6b8', transparent: true, opacity: 0.5, depthWrite: false, toneMapped: false })); pts.frustumCulled = false; group.add(pts);
   }
   let aurora = null;
-  if (th.sky !== 'void' && th.sky !== 'prism') {
+  if (th.sky !== 'void' && th.sky !== 'prism' && th.sky !== 'abyss') {
     const span = Math.max(B.max.x - B.min.x, B.max.z - B.min.z);
     aurora = auroraMesh(span * 0.95, B.max.y - 10, span * 0.9, th.aurora); group.add(aurora);
     const inner = auroraMesh(span * 0.72, B.max.y + 30, span * 0.5, [th.aurora[1], th.aurora[0]]); inner.material.uniforms.power.value = 0.6; group.add(inner);
@@ -168,7 +210,7 @@ function buildBackdrop(scene, level) {
   // What shiny things reflect. The Mirror Vault's sky is nearly black, so its mirrors get a picture of bright light panels instead;
   // the Backrooms reflect a plain warm room.
   let envTex = null;
-  if (th.sky === 'prism') envTex = canvasTexture(1024, 512, (g, w, h) => {
+  if (th.sky === 'prism' || th.sky === 'abyss') envTex = canvasTexture(1024, 512, (g, w, h) => {
     const bg = g.createLinearGradient(0, 0, 0, h); bg.addColorStop(0, '#1a1440'); bg.addColorStop(0.4, '#40358f'); bg.addColorStop(0.5, '#cfc6ff'); bg.addColorStop(0.6, '#2c5f8a'); bg.addColorStop(1, '#0e0b24');
     g.fillStyle = bg; g.fillRect(0, 0, w, h);
     const rnd = seeded(77), cols = ['#7ff6ff', '#ff9ae6', '#ffffff', '#c8b6ff', '#fff2b0'];

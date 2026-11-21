@@ -56,9 +56,20 @@ const GRIP_BASE = 0.5, GRIP_PER = 0.4, STRIP_MAX = 1.0;
 const RUCK_HOLD = 0.3;                         // the side that has the core gets this much extra: you have to out-pull it, not just match it
 const HOLD_GRIP = [1, 0.5, 0.25];              // chance a snatch works on you with 0, 1 or 2 grips squeezed while you carry
 const FOUL_SPEED = 12, FOUL_BALL_R = 5;        // late hit: crashing this hard into a rival with the core nowhere near
-// FIGHTS: land a punch on a rival who isn't carrying and you DUEL: first to DUEL_HITS punches. The loser sits in the penalty box
-// for BIN_TIME seconds. Start one with the core further than DUEL_BALL_R away and BOTH of you go to the box.
-const PUNCH_SPEED = 2.2, PUNCH_R = 1.5, DUEL_HITS = 3, DUEL_TIME = 7, DUEL_BALL_R = 12, BIN_TIME = 15;
+// FIGHTS (longer and harder since 2026-11-21): land a punch on a rival who isn't carrying and you DUEL. Both start with DUEL_HP
+// health; the first to run out is knocked out and sits in the penalty box for BIN_TIME seconds. Out of time (DUEL_TIME): whoever
+// is DUEL_EDGE health ahead wins, otherwise it is a split and you both play on. Start one with the core further than
+// DUEL_BALL_R away and BOTH of you go to the box.
+// Your punch does PUNCH_DMG[0] at PUNCH_SPEED up to PUNCH_DMG[1] at PUNCH_FULL (glove speed, m/s); x HEAD_BONUS on the helmet;
+// x COUNTER_BONUS for COUNTER_TIME after you block or dodge; x GUARD_CHIP when their guard is up; +STREAK_BONUS per hit in a row.
+// The rival throws jabs (block with a glove in front of your face, or move your head) in combos, heavy swings (gold flash:
+// you can only dodge those, a block takes half), and feints. Their timing per bot level: LEVELS[].punch.
+const PUNCH_SPEED = 2.2, PUNCH_R = 1.5, DUEL_HP = 180, DUEL_TIME = 40, DUEL_EDGE = 20, DUEL_BALL_R = 12, BIN_TIME = 15;
+const PUNCH_DMG = [5, 13], PUNCH_FULL = 5.5, HEAD_BONUS = 1.5, COUNTER_TIME = 1.2, COUNTER_BONUS = 1.8, GUARD_CHIP = 0.2, STREAK_BONUS = 0.08, STREAK_MAX = 3, PUNCH_COOL = 0.45;
+// (Measured 2026-11-21 with tests/fight5-autoplay.js, PC punches every 0.57 s: a script that waits for the guard and blocks
+// most punches wins in 10 to 22 s; one that never blocks or dodges LOSES to a PRO or LEGEND in about 12 s. After two clean hits
+// the rival covers up (three for a rookie). Earlier numbers, DUEL_HP 100 and PUNCH_DMG [9, 24], ended fights in 3 s.)
+const BOT_JAB = 14, BOT_HEAVY = 38, JAB_WIND = 0.42, HEAVY_WIND = 0.95, DODGE_DIST = 0.24, BLOCK_R = 0.42;
 
 // ------------------------------------------------------------------ scoring
 const POINTS = { hole: 1, deep: 3, penalty: 2, bank: 1, long: 1 };
@@ -83,6 +94,7 @@ const TIP_HINTS = {
   boost: { side: 'left', part: 'stick' }, steer: { side: 'left', part: 'stick' }, turn: { side: 'right', part: 'stick' }, grab: { side: 'right', part: 'trigger' },
   throw: { side: 'right', part: 'trigger' }, pass: { side: 'right', part: 'trigger' }, steal: { side: 'right', part: 'grip' }, ruck: { side: 'right', part: 'grip' },
   pause: { side: 'left', part: 'y' }, sight: { side: 'left', part: 'stick' }, penalty: { side: 'right', part: 'trigger' }, dash: { side: 'right', part: 'b' },
+  zone: { side: 'left', part: 'stick' }, zcore: { side: 'right', part: 'trigger' },
   call: { side: 'left', part: 'x' }, rear: { side: 'right', part: 'stick' }, hold: { side: 'left', part: 'grip' }, punch: { side: 'right', part: 'grip' }, windows: { side: 'left', part: 'stick' }
 };
 const TIPS = {
@@ -101,9 +113,13 @@ const TIPS = {
   rear: ['Hold the RIGHT stick down to check behind you in the mirror.', 'Hold V to check behind you.'],
   windows: ['The windows are open: fly out into space and back in anywhere.', 'The windows are open: fly out into space and back in anywhere.'],
   sight: ['Hover in the SIGHT RING to see every rider through the walls.', 'Hover in the SIGHT RING to see every rider through the walls.'],
-  punch: ['Make a fist (hold a GRIP) and swing it into a rival who isn\'t carrying: a FIGHT. Loser sits in the penalty box.', 'X throws a punch at a rival in reach.'],
+  punch: ['Make a fist (hold a GRIP) and swing it into a rival who isn\'t carrying: a FIGHT. Knock them out and they sit in the penalty box.', 'X throws a punch at a rival in reach.'],
   penalty: ['PENALTY: your free shot. Point at a round hole, hold the trigger, let go. 2 points.', 'PENALTY: your free shot. Look at a round hole and hold Space. 2 points.'],
-  aurora: ['Fly through an AURORA SHARD: your whole team gets speed and strength.', 'Fly through an AURORA SHARD: your whole team gets speed and strength.']
+  aurora: ['Fly through an AURORA SHARD: your whole team gets speed and strength.', 'Fly through an AURORA SHARD: your whole team gets speed and strength.'],
+  // ZONE CONTROL
+  zone: ['Fly into a RING and stay there. More BLUE riders than ORANGE inside, and it turns blue.', 'Fly into a RING and stay there. More BLUE riders than ORANGE inside, and it turns blue.'],
+  zcore: ['Whoever carries the CORE counts as 3 riders in a ring. Go and get it.', 'Whoever carries the CORE counts as 3 riders in a ring. Go and get it.'],
+  zscore: ['Every ring you hold pays points. The strip at the bottom of your view shows all five.', 'Every ring you hold pays points. Hold Tab for the score.']
 };
 // One rule on screen during every kickoff countdown, so the rules sink in without a manual.
 const KICKOFF_TIPS = [

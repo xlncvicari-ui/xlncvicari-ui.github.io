@@ -24,6 +24,7 @@ function paintLevelMap(g, X, Y, w, h, level, opts = {}) {
   const rooms = level._rooms || (level._rooms = expandRooms(level)), th = level.theme, mini = !!opts.mini;
   let x0 = Infinity, x1 = -Infinity, z0 = Infinity, z1 = -Infinity;
   for (const r of rooms) { x0 = Math.min(x0, r.min.x); x1 = Math.max(x1, r.max.x); z0 = Math.min(z0, r.min.z); z1 = Math.max(z1, r.max.z); }
+  if (!rooms.length) { x0 = level.bounds[0][0] * 0.82; x1 = level.bounds[1][0] * 0.82; z0 = level.bounds[0][2] * 0.86; z1 = level.bounds[1][2] * 0.86; }
   const pad = mini ? 2 : 10, s = Math.min((w - pad * 2) / (z1 - z0), (h - pad * 2) / (x1 - x0)), cx = X + w / 2, cy = Y + h / 2, mz = (z0 + z1) / 2, mx = (x0 + x1) / 2;
   const P = (x, z) => [cx + (z - mz) * -s, cy - (x - mx) * s];
   const box = (ax, bx, az, bz) => { const [px, py] = P(bx, bz), [qx, qy] = P(ax, az); return [Math.min(px, qx), Math.min(py, qy), Math.abs(qx - px), Math.abs(qy - py)]; };
@@ -34,6 +35,21 @@ function paintLevelMap(g, X, Y, w, h, level, opts = {}) {
   }
   g.fillStyle = 'rgba(20,24,34,0.85)';
   for (const b of level.blocks || []) for (const c of [b.c, toOrange(level, b.c)]) g.fillRect(...box(c[0] - b.s[0] / 2, c[0] + b.s[0] / 2, c[2] - b.s[2] / 2, c[2] + b.s[2] / 2));
+  // rocks, moving platforms (with the circle they travel, if they travel one), and the rings of ZONE CONTROL
+  const orbTop = (ORB_STYLES[th.orb] || ORB_STYLES.rock).top, dot = (x, z, r, fill) => { const [px, py] = P(x, z); g.fillStyle = fill; g.beginPath(); g.arc(px, py, Math.max(1.5, r * s), 0, Math.PI * 2); g.fill(); };
+  for (const o of level.orbs || []) for (const c of o.m === '' ? [o.c] : [o.c, toOrange(level, o.c)]) if (c[0] > x0 && c[0] < x1 && c[2] > z0 && c[2] < z1) dot(c[0], c[2], o.r, hexA(orbTop, 0.9));
+  const moverStart = mv => { const p = mv.path; return p.type === 'line' ? [p.a[0], p.a[2]] : p.type === 'helix' ? [p.c[0] + p.R * Math.cos(p.ph || 0), p.c[1] + p.R * Math.sin(p.ph || 0)] : p.type === 'orbit' ? [p.c[0] + p.R * Math.cos(p.ph || 0), p.c[2] + p.R * Math.sin(p.ph || 0)] : [p.c[0], p.c[2]]; };
+  const circled = new Set();
+  for (const mv of level.movers || []) {
+    const p = mv.path, key = p.type + p.R + (p.c || []).join();
+    if (!mini && (p.type === 'orbit' || p.type === 'helix') && !circled.has(key)) { circled.add(key); const [px, py] = P(p.c[0], p.type === 'helix' ? p.c[1] : p.c[2]); g.strokeStyle = hexA(th.strip.accent, 0.5); g.lineWidth = 2; g.setLineDash([6, 6]); g.beginPath(); g.arc(px, py, p.R * s, 0, Math.PI * 2); g.stroke(); g.setLineDash([]); }
+    dot(...moverStart(mv), mv.r, hexA(th.block || th.hull, 0.95));
+  }
+  for (const z of level.zones || []) {
+    const [zx, zz] = z.c ? [z.c[0], z.c[2]] : moverStart(level.movers[z.on]), [px, py] = P(zx, zz), col = z.home ? TEAM_COLOR[z.home] : '#ffffff';
+    g.strokeStyle = col; g.lineWidth = mini ? 2.5 : 4; g.beginPath(); g.arc(px, py, Math.max(4, z.r * s), 0, Math.PI * 2); g.stroke();
+    if (!mini) { g.fillStyle = col; g.font = uiFont(26, 900); g.textAlign = 'center'; g.textBaseline = 'middle'; g.fillText(z.id, px, py + 1); }
+  }
   // the sealed short cuts (yellow)
   if (!mini) for (const [a, b] of level.seals || []) for (const ra of rooms.filter(r => r.base === a)) for (const rb of rooms.filter(r => r.base === b)) {
     const ox0 = Math.max(ra.min.x, rb.min.x), ox1 = Math.min(ra.max.x, rb.max.x), oz0 = Math.max(ra.min.z, rb.min.z), oz1 = Math.min(ra.max.z, rb.max.z);
@@ -41,7 +57,7 @@ function paintLevelMap(g, X, Y, w, h, level, opts = {}) {
     g.strokeStyle = GOLD; g.lineWidth = 5; g.beginPath(); g.moveTo(...P(ox0, oz0)); g.lineTo(...P(ox1, oz1)); g.stroke();
   }
   // BLUE's ways to attack (toward ORANGE's end, on the right)
-  if (!mini && opts.routes !== false) {
+  if (!mini && opts.routes !== false && level.lanes) {
     g.lineWidth = 4; g.setLineDash([12, 10]); g.strokeStyle = CYAN; g.fillStyle = CYAN; g.font = uiFont(18, 800); g.textAlign = 'center'; g.textBaseline = 'middle';
     for (const lane of level.lanes) {
       const goal = level.goals.filter(q => q.kind === lane.goal).map(q => toOrange(level, q.c)), end = goal[Math.floor(goal.length / 2)];
@@ -49,7 +65,7 @@ function paintLevelMap(g, X, Y, w, h, level, opts = {}) {
     }
     g.setLineDash([]);
   }
-  for (const q of level.goals) for (const team of ['blue', 'orange']) {
+  for (const q of level.goals || []) for (const team of ['blue', 'orange']) {
     const c = team === 'blue' ? q.c : toOrange(level, q.c), [px, py] = P(c[0], c[2]), deep = q.kind === 'deep', r = mini ? (deep ? 5 : 3.5) : (deep ? 15 : 10);
     g.fillStyle = TEAM_COLOR[team]; g.beginPath(); g.arc(px, py, r, 0, Math.PI * 2); g.fill();
     if (!mini) { g.strokeStyle = '#ffffff'; g.lineWidth = 2; g.stroke(); g.fillStyle = '#04121f'; g.font = uiFont(deep ? 20 : 15, 900); g.textAlign = 'center'; g.textBaseline = 'middle'; g.fillText(deep ? '3' : '1', px, py + 1); }
@@ -66,83 +82,107 @@ function paintLevelMap(g, X, Y, w, h, level, opts = {}) {
 
 // ------------------------------------------------------------------ start menu
 const MENU5_W = 2.0, MENU5_H = 1.3;
-const SHORT_NAME = { meridian: 'MERIDIAN', docks: 'NEON DOCKS', foundry: 'FOUNDRY', backrooms: 'BACKROOMS', vault: 'MIRROR VAULT' };
-function levelCard(g, panel, b, level, picked) {
+const SHORT_NAME = { meridian: 'MERIDIAN', docks: 'NEON DOCKS', foundry: 'FOUNDRY', backrooms: 'BACKROOMS', vault: 'MIRROR VAULT', chasm: 'ENDLESS CHASM', gardens: 'SKY GARDENS', carousel: 'CAROUSEL' };
+function levelCard(g, panel, b, level, picked, pool) {
   panel.button(b);
-  g.fillStyle = picked ? 'rgba(102,255,255,0.2)' : 'rgba(255,255,255,0.06)'; rrect(g, b.x, b.y, b.w, b.h, 20); g.fill();
-  const a = { x: b.x + 10, y: b.y + 10, w: b.w - 20, h: b.h - 62 };
-  g.save(); rrect(g, a.x, a.y, a.w, a.h, 14); g.clip();
+  g.fillStyle = picked ? 'rgba(102,255,255,0.2)' : 'rgba(255,255,255,0.06)'; rrect(g, b.x, b.y, b.w, b.h, 22); g.fill();
+  const a = { x: b.x + 10, y: b.y + 10, w: b.w - 20, h: b.h - 66 };
+  g.save(); rrect(g, a.x, a.y, a.w, a.h, 16); g.clip();
   if (level) {
     const th = level.theme, bg = g.createLinearGradient(0, a.y, 0, a.y + a.h); bg.addColorStop(0, '#05070f'); bg.addColorStop(1, hexA(th.aurora[0], 0.4));
     g.fillStyle = bg; g.fillRect(a.x, a.y, a.w, a.h);
-    paintLevelMap(g, a.x + 6, a.y + 6, a.w - 12, a.h - 12, level, { mini: true });
+    paintLevelMap(g, a.x + 8, a.y + 8, a.w - 16, a.h - 16, level, { mini: true });
+    if (level.loop) { g.fillStyle = '#ffffff'; g.font = uiFont(34, 900); g.textAlign = 'right'; g.textBaseline = 'middle'; g.fillText('∞', a.x + a.w - 12, a.y + 24); }
   } else {
-    LEVELS5.forEach((l, i) => { g.fillStyle = hexA(l.theme.aurora[0], 0.55); g.fillRect(a.x + i * a.w / LEVELS5.length, a.y, a.w / LEVELS5.length + 1, a.h); });
+    pool.forEach((l, i) => { g.fillStyle = hexA(l.theme.aurora[0], 0.55); g.fillRect(a.x + i * a.w / pool.length, a.y, a.w / pool.length + 1, a.h); });
     g.fillStyle = 'rgba(5,7,15,0.55)'; g.fillRect(a.x, a.y, a.w, a.h);
     g.fillStyle = INK; g.font = uiFont(90, 900); g.textAlign = 'center'; g.textBaseline = 'middle'; g.fillText('?', a.x + a.w / 2, a.y + a.h / 2 + 4);
   }
   g.restore();
-  if (picked) { g.strokeStyle = GOLD; g.lineWidth = 5; rrect(g, b.x + 2, b.y + 2, b.w - 4, b.h - 4, 18); g.stroke(); }
+  if (picked) { g.strokeStyle = GOLD; g.lineWidth = 5; rrect(g, b.x + 2, b.y + 2, b.w - 4, b.h - 4, 20); g.stroke(); }
   g.textAlign = 'center'; g.textBaseline = 'middle'; g.fillStyle = picked ? GOLD : INK;
-  const name = level ? SHORT_NAME[level.id] || level.name : 'SHUFFLE'; fitFont(g, name, b.w - 20, 26, 900); g.fillText(name, b.x + b.w / 2, b.y + b.h - 26);
+  const name = level ? SHORT_NAME[level.id] || level.name : 'SHUFFLE'; fitFont(g, name, b.w - 24, 30, 900); g.fillText(name, b.x + b.w / 2, b.y + b.h - 30);
 }
 function paintMenu5(g, W, H, panel, m) {
   cardBg(g, W, H);
-  const P = 48;
+  const P = 48, mode = MODES5.find(x => x.id === m.mode) || MODES5[0], other = MODES5.find(x => x.id !== mode.id);
   g.textBaseline = 'middle';
   if (m.result) {
-    g.textAlign = 'left'; g.font = uiFont(36, 900); g.fillStyle = DIM; g.fillText('FULL TIME', P, 56);
+    g.textAlign = 'left'; g.font = uiFont(36, 900); g.fillStyle = DIM; g.fillText('FULL TIME', P, 52);
     g.font = uiFont(96, 900); textShadow(g, 14);
-    g.fillStyle = TEAM_COLOR.blue; g.fillText(String(m.result.blue), P, 134);
+    g.fillStyle = TEAM_COLOR.blue; g.fillText(String(m.result.blue), P, 126);
     const wb = g.measureText(String(m.result.blue)).width;
-    g.fillStyle = DIM; g.fillText(':', P + wb + 20, 130);
-    g.fillStyle = TEAM_COLOR.orange; g.fillText(String(m.result.orange), P + wb + 64, 134); noShadow(g);
+    g.fillStyle = DIM; g.fillText(':', P + wb + 20, 122);
+    g.fillStyle = TEAM_COLOR.orange; g.fillText(String(m.result.orange), P + wb + 64, 126); noShadow(g);
     const wo = g.measureText(String(m.result.orange)).width, tx = P + wb + wo + 100;
-    g.fillStyle = INK; g.font = uiFont(22, 700); let yy = 110; for (const l of wrapLines(g, m.result.line1, W - P - 500 - tx).slice(0, 3)) { g.fillText(l, tx, yy); yy += 30; }
+    g.fillStyle = INK; g.font = uiFont(22, 700); let yy = 100; for (const l of wrapLines(g, m.result.line1, W - P - 500 - tx).slice(0, 3)) { g.fillText(l, tx, yy); yy += 30; }
   } else {
-    g.textAlign = 'left'; g.fillStyle = INK; g.font = uiFont(80, 900); textShadow(g, 16); g.fillText('SURGE LEAGUE', P, 76); noShadow(g);
-    g.fillStyle = CYAN; g.font = uiFont(28, 800); g.fillText('STATION RUGBY  ·  8 vs 8  ·  ZERO GRAVITY', P + 4, 138);
-    g.fillStyle = DIM; g.font = uiFont(22, 600); g.fillText('Get the CORE into their goals. Pass, dash, ruck, fight for it.', P + 4, 176);
+    g.textAlign = 'left'; g.fillStyle = INK; g.font = uiFont(78, 900); textShadow(g, 16); g.fillText('SURGE LEAGUE', P, 72); noShadow(g);
+    g.fillStyle = CYAN; g.font = uiFont(28, 800); g.fillText(`${mode.name}  ·  8 vs 8  ·  ZERO GRAVITY`, P + 4, 130);
+    g.fillStyle = DIM; g.font = uiFont(22, 600); g.fillText(mode.line, P + 4, 166);
   }
   // player card
-  const pc = { x: W - P - 470, y: 30, w: 470, h: 150 };
+  const pc = { x: W - P - 470, y: 26, w: 470, h: 150 };
   g.fillStyle = 'rgba(255,255,255,0.06)'; rrect(g, pc.x, pc.y, pc.w, pc.h, 22); g.fill();
   g.textAlign = 'center'; g.fillStyle = m.licensed ? GOLD : INK; fitFont(g, m.profile.name, pc.w - 170, 34, 900); g.fillText(m.profile.name, pc.x + pc.w / 2, pc.y + 42);
   g.fillStyle = DIM; fitFont(g, m.profile.sub, pc.w - 40, 21, 700); g.fillText(m.profile.sub, pc.x + pc.w / 2, pc.y + 88);
   g.fillStyle = m.licensed ? GOLD : '#5d7088'; g.font = uiFont(19, 900); g.fillText(m.licensed ? '★ LICENSED PILOT' : 'NO PILOT LICENSE YET', pc.x + pc.w / 2, pc.y + 124);
   tile(g, panel, { id: 'player-prev', x: pc.x + 10, y: pc.y + 12, w: 60, h: 60, row: -1, col: 0 }, '#7a8aa0', '‹');
   tile(g, panel, { id: 'player-next', x: pc.x + pc.w - 70, y: pc.y + 12, w: 60, h: 60, row: -1, col: 1 }, '#7a8aa0', '›');
-  // big choices
-  const y0 = 208, gap = 24, bw = (W - P * 2 - gap) / 2;
-  tile(g, panel, { id: 'play', x: P, y: y0, w: bw, h: 176, row: 0, col: 0 }, CYAN, m.result ? 'PLAY AGAIN' : 'PLAY MATCH', `${m.length}  ·  you fly for BLUE`, true);
-  tile(g, panel, { id: 'train', x: P + bw + gap, y: y0, w: bw, h: 176, row: 0, col: 1 }, GOLD, m.licensed ? 'TRAINING' : 'EARN YOUR PILOT LICENSE', m.licensed ? 'fly it again any time' : 'training: every control in 3 minutes · gold board', true);
-  // levels
-  const y1 = y0 + 198, n = LEVELS5.length + 1, lg = 14, lw = (W - P * 2 - lg * (n - 1)) / n;
-  LEVELS5.forEach((l, i) => levelCard(g, panel, { id: 'level', value: l.id, x: P + i * (lw + lg), y: y1, w: lw, h: 236, row: 1, col: i }, l, m.levelPick === l.id));
-  levelCard(g, panel, { id: 'level', value: 'shuffle', x: P + LEVELS5.length * (lw + lg), y: y1, w: lw, h: 236, row: 1, col: LEVELS5.length }, null, m.levelPick === 'shuffle');
-  const y2 = y1 + 254, w4 = (W - P * 2 - gap * 3) / 4;
-  tile(g, panel, { id: 'help', x: P, y: y2, w: w4, h: 84, row: 2, col: 0 }, '#7a8aa0', 'HOW TO PLAY');
-  tile(g, panel, { id: 'bots', x: P + (w4 + gap), y: y2, w: w4, h: 84, row: 2, col: 1 }, '#7a8aa0', `BOTS: ${m.level}`);
-  tile(g, panel, { id: 'length', x: P + (w4 + gap) * 2, y: y2, w: w4, h: 84, row: 2, col: 2 }, '#7a8aa0', m.length);
-  tile(g, panel, { id: 'fights', x: P + (w4 + gap) * 3, y: y2, w: w4, h: 84, row: 2, col: 3 }, m.fights ? RED : '#7a8aa0', `FIGHTS: ${m.fights ? 'ON' : 'OFF'}`);
-  const y3 = y2 + 100, w3 = (W - P * 2 - gap * 2) / 3;
-  tile(g, panel, { id: 'player-new', x: P, y: y3, w: w3, h: 76, row: 3, col: 0 }, '#7a8aa0', 'NEW PLAYER');
-  tile(g, panel, { id: 'version', x: P + w3 + gap, y: y3, w: w3, h: 76, row: 3, col: 1 }, '#7a8aa0', m.versionLabel);
-  tile(g, panel, { id: 'home', x: P + (w3 + gap) * 2, y: y3, w: w3, h: 76, row: 3, col: 2 }, '#c0605a', 'EXIT');
+  // big choices: play, which game, training
+  const y0 = 196, gap = 22, inner = W - P * 2 - gap * 2, wPlay = inner * 0.42, wMode = inner * 0.27, wTrain = inner - wPlay - wMode;
+  tile(g, panel, { id: 'play', x: P, y: y0, w: wPlay, h: 152, row: 0, col: 0 }, CYAN, m.result ? 'PLAY AGAIN' : 'PLAY MATCH', `${m.length}  ·  you fly for BLUE`, true);
+  tile(g, panel, { id: 'mode', x: P + wPlay + gap, y: y0, w: wMode, h: 152, row: 0, col: 1 }, '#b48cff', `GAME: ${mode.name}`, `switch to ${other.name}`, true);
+  tile(g, panel, { id: 'train', x: P + wPlay + wMode + gap * 2, y: y0, w: wTrain, h: 152, row: 0, col: 2 }, GOLD, m.licensed ? 'TRAINING' : 'EARN YOUR LICENSE', m.licensed ? 'fly it again any time' : 'every control · 3 minutes · gold board', true);
+  // levels: a row of four cards that slides (arrows at the ends, or keep pushing the stick sideways)
+  const pool = LEVELS5.filter(l => l.mode === m.mode), items = [...pool, null], show = Math.min(4, items.length), scroll = Math.max(0, Math.min(items.length - show, m.scroll || 0));
+  const y1 = y0 + 172, aw = 64, lg = 16, rowW = W - P * 2 - (aw + lg) * 2, cw = (rowW - lg * 3) / 4, x0 = P + aw + lg + (rowW - (show * cw + (show - 1) * lg)) / 2, more = items.length > show;
+  if (more) tile(g, panel, { id: 'scroll-l', x: P, y: y1 + 60, w: aw, h: 180, row: 1, col: 0 }, scroll > 0 ? CYAN : '#3a4658', '‹');
+  for (let i = 0; i < show; i++) { const l = items[scroll + i]; levelCard(g, panel, { id: 'level', value: l ? l.id : 'shuffle', x: x0 + i * (cw + lg), y: y1, w: cw, h: 300, row: 1, col: i + 1 }, l, m.levelPick === (l ? l.id : 'shuffle'), pool); }
+  if (more) tile(g, panel, { id: 'scroll-r', x: W - P - aw, y: y1 + 60, w: aw, h: 180, row: 1, col: 5 }, scroll < items.length - show ? CYAN : '#3a4658', '›');
+  // which part of the row you are looking at
+  if (more) for (let i = 0; i < items.length; i++) { g.fillStyle = i >= scroll && i < scroll + show ? CYAN : 'rgba(255,255,255,0.18)'; g.beginPath(); g.arc(W / 2 + (i - (items.length - 1) / 2) * 22, y1 + 314, 5, 0, 7); g.fill(); }
+  const y2 = y1 + 332, w4 = (W - P * 2 - gap * 3) / 4;
+  tile(g, panel, { id: 'help', x: P, y: y2, w: w4, h: 80, row: 2, col: 0 }, '#7a8aa0', 'HOW TO PLAY');
+  tile(g, panel, { id: 'bots', x: P + (w4 + gap), y: y2, w: w4, h: 80, row: 2, col: 1 }, '#7a8aa0', `BOTS: ${m.level}`);
+  tile(g, panel, { id: 'length', x: P + (w4 + gap) * 2, y: y2, w: w4, h: 80, row: 2, col: 2 }, '#7a8aa0', m.length);
+  tile(g, panel, { id: 'fights', x: P + (w4 + gap) * 3, y: y2, w: w4, h: 80, row: 2, col: 3 }, m.fights ? RED : '#7a8aa0', `FIGHTS: ${m.fights ? 'ON' : 'OFF'}`);
+  const y3 = y2 + 94, w3 = (W - P * 2 - gap * 2) / 3;
+  tile(g, panel, { id: 'player-new', x: P, y: y3, w: w3, h: 72, row: 3, col: 0 }, '#7a8aa0', 'NEW PLAYER');
+  tile(g, panel, { id: 'version', x: P + w3 + gap, y: y3, w: w3, h: 72, row: 3, col: 1 }, '#7a8aa0', m.versionLabel);
+  tile(g, panel, { id: 'home', x: P + (w3 + gap) * 2, y: y3, w: w3, h: 72, row: 3, col: 2 }, '#c0605a', 'EXIT');
   // hint strip
-  const hy = y3 + 94;
-  g.fillStyle = 'rgba(255,255,255,0.05)'; rrect(g, P, hy, W - P * 2, 64, 20); g.fill();
+  const hy = y3 + 86;
+  g.fillStyle = 'rgba(255,255,255,0.05)'; rrect(g, P, hy, W - P * 2, 60, 20); g.fill();
   g.textAlign = 'center'; g.fillStyle = '#d6e6f5'; const hint = panel.hint || 'Point at anything to learn about it.';
-  fitFont(g, hint, W - P * 2 - 40, 26, 600); g.fillText(hint, W / 2, hy + 33);
+  fitFont(g, hint, W - P * 2 - 40, 25, 600); g.fillText(hint, W / 2, hy + 31);
   g.fillStyle = DIM; g.font = uiFont(20, 600);
-  g.fillText(m.inVR ? 'Point with either controller and pull the trigger (or left stick and A).' : 'Click, or arrow keys and Enter.', W / 2, H - 22);
+  g.fillText(m.inVR ? 'Point with either controller and pull the trigger (or left stick and A).' : 'Click, or arrow keys and Enter.', W / 2, H - 20);
+}
+
+// ------------------------------------------------------------------ ZONE CONTROL: the five rings and both scores, low in your view
+function paintZones(g, W, H, panel, m) {
+  g.fillStyle = 'rgba(6,12,24,0.74)'; rrect(g, 0, 0, W, H, H / 2); g.fill();
+  g.textAlign = 'center'; g.textBaseline = 'middle';
+  g.font = uiFont(48, 900); g.fillStyle = TEAM_COLOR.blue; g.fillText(String(m.blue), 74, H / 2 + 2); g.fillStyle = TEAM_COLOR.orange; g.fillText(String(m.orange), W - 74, H / 2 + 2);
+  const n = m.zones.length, gap = (W - 300) / n;
+  m.zones.forEach((z, i) => {
+    const x = 150 + gap * (i + 0.5), y = H / 2, r = 32;
+    g.fillStyle = z.own ? TEAM_COLOR[z.own] : 'rgba(255,255,255,0.16)'; g.beginPath(); g.arc(x, y, r, 0, 7); g.fill();
+    // the bar: an arc growing round the ring toward whoever is taking it
+    if (Math.abs(z.cap) > 0.03 && Math.abs(z.cap) < 1) { g.strokeStyle = TEAM_COLOR[z.cap > 0 ? 'blue' : 'orange']; g.lineWidth = 9; g.beginPath(); g.arc(x, y, r + 9, -Math.PI / 2, -Math.PI / 2 + Math.abs(z.cap) * Math.PI * 2); g.stroke(); }
+    if (z.me) { g.strokeStyle = '#ffffff'; g.lineWidth = 4; g.beginPath(); g.arc(x, y, r + 17, 0, 7); g.stroke(); }
+    g.fillStyle = z.own ? '#04121f' : INK; g.font = uiFont(36, 900); g.fillText(z.id, x, y + 2);
+    if (z.fight) { g.fillStyle = GOLD; g.font = uiFont(30, 900); g.fillText('!', x + r + 6, y - r + 6); }
+  });
 }
 
 // ------------------------------------------------------------------ how to play (five short pages)
 const BRIEF5_W = 2.0, BRIEF5_H = 1.3, BRIEF5_PAGES = 5;
 function paintBriefing5(g, W, H, panel, m) {
   cardBg(g, W, H);
-  const P = 52, titles = ['THE GAME IN TEN SECONDS', `THIS LEVEL: ${m.level.name}`, 'YOUR CONTROLS', 'RUCKS: SQUEEZE TO WIN', 'FIGHTS, FOULS AND AURORA'];
+  const ctl = m.mode === 'control';
+  const P = 52, titles = [ctl ? 'ZONE CONTROL IN TEN SECONDS' : 'THE GAME IN TEN SECONDS', `THIS LEVEL: ${m.level.name}`, 'YOUR CONTROLS', 'RUCKS: SQUEEZE TO WIN', ctl ? 'FIGHTS AND AURORA' : 'FIGHTS, FOULS AND AURORA'];
   g.textBaseline = 'middle'; g.textAlign = 'left';
   g.fillStyle = CYAN; g.font = uiFont(24, 800); g.fillText(`HOW TO PLAY  ·  ${m.page + 1} of ${BRIEF5_PAGES}  ·  one minute to read`, P, 46);
   for (let i = 0; i < BRIEF5_PAGES; i++) { g.fillStyle = i <= m.page ? CYAN : 'rgba(255,255,255,0.15)'; rrect(g, W - P - (BRIEF5_PAGES - i) * 54, 36, 44, 12, 6); g.fill(); }
@@ -159,11 +199,15 @@ function paintBriefing5(g, W, H, panel, m) {
   };
   const frame = (x, y, w, h) => { g.fillStyle = 'rgba(255,255,255,0.04)'; rrect(g, x, y, w, h, 26); g.fill(); };
   if (m.page === 0) {
-    body([[null, '8 against 8, no gravity. You fly for BLUE with 7 teammates.'],
+    body(ctl ? [[null, '8 against 8, no gravity. You fly for BLUE with 7 teammates. There are no goals in this game.'],
+          ['HOLD THE RINGS', `Five rings, A to E. Fly into one and stay: while BLUE has more riders inside than ORANGE, it turns blue. Each ring you hold pays points every second. First to ${m.target} wins.`],
+          ['THE CORE COUNTS AS 3', 'Whoever carries the CORE (the glowing ball) counts as three riders in a ring. Rip it off them, or fly into them for a ruck.'],
+          ['CLEAR THEM OUT', 'Dash (B) into a rival to knock them out of a ring. Knock one out in a fight and they sit 15 seconds in the box.']]
+         : [[null, '8 against 8, no gravity. You fly for BLUE with 7 teammates.'],
           ['SCORE', `Get the CORE (the glowing ball) into ORANGE's goals. First team to ${m.target} wins. If the clock runs out first, most points wins.`],
           ['NOBODY OWNS IT', 'Rip it out of a rival\'s hands, crash into them for it, or pick off a pass.'],
           ['STAY TOGETHER', 'Like rugby: teammates near you make you stronger in every tussle, and they are your pass when you get swarmed.']],
-         P, 176, W * 0.5);
+         P, 176, W * 0.5, ctl ? 28 : 30);
     const ix = W * 0.6, iw = W - ix - P, iy = 170, ih = 600;
     frame(ix, iy, iw, ih);
     for (let i = 0; i < 8; i++) {
@@ -183,9 +227,11 @@ function paintBriefing5(g, W, H, panel, m) {
     const mw = W * 0.56;
     frame(P, 150, mw, 640);
     paintLevelMap(g, P + 14, 164, mw - 28, 612, m.level);
-    g.fillStyle = CYAN; g.font = uiFont(21, 700); g.textAlign = 'center'; g.fillText('dashed lines: BLUE\'s ways to attack  ·  double ring: the SIGHT RING  ·  red box: PENALTY BOX', P + mw / 2, 812); g.textAlign = 'left';
+    g.fillStyle = CYAN; g.font = uiFont(21, 700); g.textAlign = 'center'; g.fillText(ctl ? 'lettered circles: the RINGS  ·  dashed circle: where the platforms travel  ·  red box: PENALTY BOX' : 'dashed lines: BLUE\'s ways to attack  ·  double ring: the SIGHT RING  ·  red box: PENALTY BOX', P + mw / 2, 812); g.textAlign = 'left';
     const x = P + mw + 36, w = W - x - P;
-    const rows = [['1', 'LOBBY HOLE', 'the round holes in their end wall'], ['3', 'DEEP GOAL', 'the long way round, behind or above their end'],
+    const rows = ctl ? [['1', 'EACH RING', 'a point every 2 seconds while you hold it'], ['x2', 'ALL FIVE', 'hold every ring and your points double'],
+                        ['3', 'THE CORE', 'its carrier counts as 3 riders in a ring'], ['↕', 'MOVING RINGS', 'B and D ride platforms that never stop'], ['A', 'HOME RING', 'yours from the start: don\'t leave it empty']]
+      : [['1', 'LOBBY HOLE', 'the round holes in their end wall'], ['3', 'DEEP GOAL', 'the long way round, behind or above their end'],
                   ['+1', 'BANK SHOT', 'off any wall on the way in'], ['+1', 'LONG SHOT', 'from 28 m or further'], ['2', 'PENALTY', 'a free shot after a late hit']];
     let y = 176;
     for (const [pts, name, text] of rows) {
@@ -195,7 +241,9 @@ function paintBriefing5(g, W, H, panel, m) {
       y = yy + 14;
     }
     g.fillStyle = '#9ff6ff'; g.font = uiFont(23, 800); let yy = y + 8;
-    const note = m.level.exterior === false ? 'Solid walls here, no windows. Hover in the SIGHT RING to see every rider through them.'
+    const note = ctl ? (m.level.rooms.length ? 'The windows are OPEN: fly out and back in anywhere. Platforms are solid: use them as cover.' : 'No walls at all. Rocks and platforms are solid: use them as cover. The lights mark the edge of the field.')
+      : m.level.loop ? 'No floor and no ceiling: fly up or down as far as you like, it never ends. The two shimmering walls are false: fly through them.'
+      : m.level.exterior === false ? 'Solid walls here, no windows. Hover in the SIGHT RING to see every rider through them.'
       : 'The windows are OPEN: fly out into space and back in anywhere. Glowing lattice walls are solid, but you see through them.';
     for (const l of wrapLines(g, note, w)) { g.fillText(l, x, yy); yy += 30; }
     g.fillStyle = INK; g.font = uiFont(21, 600); yy += 10; for (const l of wrapLines(g, m.level.blurb, w)) { g.fillText(l, x, yy); yy += 27; }
@@ -247,12 +295,13 @@ function paintBriefing5(g, W, H, panel, m) {
     g.fillStyle = INK; g.font = uiFont(22, 800); g.fillText('pull the marker to your side', ix + iw / 2, ty + 66);
     g.textAlign = 'left';
   } else {
-    body([['FIGHT', 'Make a fist (hold a GRIP) and swing it into a rival who isn\'t carrying. First to 3 hits. When they wind up, block with a glove in front of your face, or duck.'],
-          ['PENALTY BOX', 'The loser sits 15 seconds in the box above the field, watching. Start a fight far from the CORE and you BOTH sit.'],
-          ['LATE HIT', 'Crash hard into a rival who is nowhere near the CORE and their team gets a free shot worth 2.'],
+    body([['FIGHT', 'Make a fist (hold a GRIP) and swing it into a rival who isn\'t carrying. You both have a health bar: harder swings and helmet shots hurt more. Knock them out.'],
+          ['BLOCK, DODGE, COUNTER', 'Red flash: a jab. Glove in front of your face, or move your head. Gold flash: a heavy swing, only a dodge saves you. Hit when their guard drops, or right after you block or dodge.'],
+          ['PENALTY BOX', ctl ? 'The loser sits 15 seconds in the box, watching: one rider less in the rings.' : 'The loser sits 15 seconds in the box, watching. Start a fight far from the CORE and you BOTH sit.'],
+          ctl ? ['SHOVE', 'There are no late hits in ZONE CONTROL: crashing into rivals to clear a ring is the game.'] : ['LATE HIT', 'Crash hard into a rival who is nowhere near the CORE and their team gets a free shot worth 2.'],
           ['AURORA SHARDS', 'Ribbons of light drift through the level. Fly through one and your whole team is faster and stronger for 7 seconds.'],
           ['ALWAYS VISIBLE', 'The CORE glows through every wall. Hold the right stick down for your mirror.']],
-         P, 170, W * 0.56, 28);
+         P, 166, W * 0.56, 25, 1.32);
     const ix = W * 0.64, iw = W - ix - P, iy = 170, ih = 600; frame(ix, iy, iw, ih);
     // the box above the field
     const bx = ix + iw / 2, top = iy + 70;
@@ -289,7 +338,7 @@ function paintPause5(g, W, H, panel, m) {
   else { g.fillStyle = TEAM_COLOR.blue; g.textAlign = 'right'; g.fillText(`BLUE ${m.blue}`, W / 2 - 24, 128); g.fillStyle = DIM; g.textAlign = 'center'; g.fillText(':', W / 2, 126);
          g.fillStyle = TEAM_COLOR.orange; g.textAlign = 'left'; g.fillText(`${m.orange} ORANGE`, W / 2 + 24, 128); }
   g.textAlign = 'center'; g.fillStyle = DIM; fitFont(g, m.where, W - 100, 22, 700); g.fillText(m.where, W / 2, 172);
-  const items = [['resume', 'RESUME', CYAN], ['help', 'HOW TO PLAY', '#7a8aa0'], ['reach', m.reach, '#7a8aa0'], ['flight', m.flight, '#7a8aa0'], ['turn', m.turn, '#7a8aa0'],
+  const items = [['resume', 'RESUME', CYAN], m.training ? ['skip', 'SKIP THIS STEP', GOLD] : ['help', 'HOW TO PLAY', '#7a8aa0'], ['reach', m.reach, '#7a8aa0'], ['flight', m.flight, '#7a8aa0'], ['turn', m.turn, '#7a8aa0'],
                  ['restart', m.training ? 'RESTART TRAINING' : 'RESTART MATCH', '#7a8aa0'], ['menu', 'MAIN MENU', '#7a8aa0'], ['version', m.versionLabel, '#7a8aa0'], ['home', m.exitLabel, '#c0605a']];
   items.forEach(([id, label, color], i) => tile(g, panel, { id, x: 60, y: 204 + i * 110, w: W - 120, h: 94, row: i, col: 0 }, color, label, null, i === 0));
   g.fillStyle = DIM; g.font = uiFont(22, 600); g.textAlign = 'center';
@@ -316,13 +365,18 @@ function paintRuck(g, W, H, panel, c) {
     const line = c.carrier ? `${how}  ·  ${c.inVR ? 'B' : 'R'} OFFLOADS` : how;
     fitFont(g, line, W - 40, 23, 700); g.fillText(line, W / 2, 180);
   } else {
-    g.fillStyle = c.wind ? '#ffffff' : RED; g.font = uiFont(44, 900); g.fillText(c.wind ? 'BLOCK!' : 'FIGHT', W / 2, 38);
-    for (let i = 0; i < DUEL_HITS; i++) {
-      g.fillStyle = i < c.you ? CYAN : 'rgba(255,255,255,0.16)'; g.beginPath(); g.arc(W / 2 - 60 - i * 44, 96, 16, 0, Math.PI * 2); g.fill();
-      g.fillStyle = i < c.them ? TEAM_COLOR.orange : 'rgba(255,255,255,0.16)'; g.beginPath(); g.arc(W / 2 + 60 + i * 44, 96, 16, 0, Math.PI * 2); g.fill();
+    // what to do this instant, in one word, then both health bars
+    const cue = { jab: ['BLOCK!', '#ffffff'], heavy: ['DODGE!', GOLD], feint: ['BLOCK!', '#ffffff'], counter: ['COUNTER NOW!', CYAN], guard: ['GUARD UP: WAIT', DIM], open: ['HIT THEM!', RED] }[c.cue] || ['FIGHT', RED];
+    g.fillStyle = cue[1]; g.font = uiFont(46, 900); g.fillText(cue[0], W / 2, 40);
+    const bw = W / 2 - 110, by = 78, bh = 34;
+    for (const [x, hp, col, dir] of [[40, c.you, CYAN, 1], [W - 40 - bw, c.them, TEAM_COLOR.orange, -1]]) {
+      g.fillStyle = 'rgba(255,255,255,0.14)'; rrect(g, x, by, bw, bh, 12); g.fill();
+      const w = Math.max(0, Math.min(1, hp / DUEL_HP)) * bw;
+      if (w > 4) { g.fillStyle = hp < DUEL_HP * 0.3 ? RED : col; rrect(g, dir > 0 ? x : x + bw - w, by, w, bh, 12); g.fill(); }
     }
-    g.fillStyle = INK; g.font = uiFont(22, 900); g.fillText('YOU', 60, 96); g.fillText('THEM', W - 64, 96); g.fillText('v', W / 2, 96);
-    const line = c.off ? 'FAR FROM THE CORE: you BOTH go to the box' : c.inVR ? 'GRIP + SWING TO PUNCH · GLOVE UP OR DUCK TO BLOCK' : 'X PUNCHES · HOLD G TO BLOCK';
+    g.fillStyle = INK; g.font = uiFont(24, 900); g.fillText('YOU', 40 + bw / 2, by + bh / 2 + 1); g.fillText('THEM', W - 40 - bw / 2, by + bh / 2 + 1);
+    g.fillStyle = DIM; g.font = uiFont(26, 900); g.fillText(String(Math.max(0, c.secs)), W / 2, by + bh / 2 + 1);
+    const line = c.off ? 'FAR FROM THE CORE: you BOTH go to the box' : c.inVR ? 'RED: BLOCK OR DODGE · GOLD: DODGE · HIT WHEN THE GUARD DROPS' : 'X PUNCHES · HOLD G TO BLOCK · A/D DODGES';
     g.fillStyle = c.off ? GOLD : INK; fitFont(g, line, W - 40, 23, 700); g.fillText(line, W / 2, 160);
   }
 }

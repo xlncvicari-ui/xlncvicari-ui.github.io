@@ -11,12 +11,14 @@
 <script src="js/gfx.js"></script>
 <script src="js/models.js"></script>
 <script src="js/world.js"></script>
+<script src="js/worldmesh.js"></script>
 <script src="js/levels.js"></script>
 <script src="js/sky.js"></script>
 <script src="js/ui5.js"></script>
 <script src="js/profile.js"></script>
 <script src="js/teamai.js"></script>
 <script src="js/brawl.js"></script>
+<script src="js/control.js"></script>
 <script src="js/train5.js"></script>
 <script src="js/game.js"></script>
 <style>
@@ -44,12 +46,16 @@
 <body>
 <div id="panel">
   <h1>Surge League</h1>
-  <div class="sub">STATION RUGBY · 8 VS 8 · ZERO GRAVITY · VERSION 5</div>
-  <p>A team sport for VR. Sixteen riders on jet boards fight over one glowing ball, the <b>CORE</b>, in zero gravity. You fly for <b>BLUE</b> with 7 teammates against 8 on <b>ORANGE</b>. Get the CORE into their goals. First team to the target (11, 15 or 21) wins.</p>
-  <p>Press <b>VR</b> (bottom right). <b>EARN YOUR PILOT LICENSE</b> walks you through every control in about 3 minutes and turns your board gold. <b>HOW TO PLAY</b> is five short pages with a map of the level.</p>
+  <div class="sub">8 VS 8 · ZERO GRAVITY · TWO GAMES · VERSION 5.1</div>
+  <p>A team sport for VR. Sixteen riders on jet boards fight over one glowing ball, the <b>CORE</b>, in zero gravity. You fly for <b>BLUE</b> with 7 teammates against 8 on <b>ORANGE</b>. There are two games, picked with the <b>GAME</b> tile on the menu. <b>Station Rugby</b>: get the CORE into their goals, first team to the target (7, 11 or 21) wins. <b>Zone Control</b>: no goals. Five rings, and the team with more riders inside a ring holds it and scores every second.</p>
+  <p>Press <b>VR</b> (bottom right). <b>EARN YOUR PILOT LICENSE</b> walks you through every control in about 3 minutes and turns your board gold. <b>HOW TO PLAY</b> is five short pages with a map of the level. Stuck on a training step? Pause, then SKIP THIS STEP.</p>
 
-  <h2>FIVE LEVELS</h2>
-  <p><b>Meridian Station</b>, <b>Neon Docks</b>, <b>Foundry Works</b>, <b>The Backrooms</b> and <b>The Mirror Vault</b>. On the space levels the windows are open: fly out into space and back in anywhere. Glowing lattice walls are solid but see-through. The CORE shows through every wall.</p>
+  <h2>EIGHT LEVELS</h2>
+  <p>Station Rugby: <b>Meridian Station</b>, <b>Neon Docks</b>, <b>Foundry Works</b>, <b>The Backrooms</b>, <b>The Mirror Vault</b> and <b>The Endless Chasm</b>, a twelve-sided shaft with no floor and no ceiling: fly up or down forever. Two of its walls are false. Zone Control: <b>Sky Gardens</b> (no walls, floating gardens, two rings on lifts) and <b>The Carousel</b> (a round hall, two rings riding platforms that circle it).</p>
+  <p>On the space levels the windows are open: fly out and back in anywhere. Veined see-through walls are solid. Rocks and moving platforms are solid too. The CORE shows through every wall.</p>
+
+  <h2>ZONE CONTROL</h2>
+  <p>Fly into a ring and stay. While your team has more riders inside than the other, the ring fills with your color and then pays a point every 2 seconds. The rider carrying the CORE counts as 3. Hold all five rings and your points double. Dash into rivals to knock them out of a ring.</p>
 
   <h2>SCORING</h2>
   <table>
@@ -62,7 +68,7 @@
 
   <h2>CONTACT</h2>
   <p><b>Ruck</b>: fly into the rival carrying the CORE and you lock up. Every trigger and grip you squeeze adds strength, fluttering the triggers strips it, and teammates within 6 m bind on. <b>Dash</b> (B) into it for a head start.</p>
-  <p><b>Fight</b>: punch a rival who isn't carrying. First to 3. The loser sits 15 seconds in the <b>penalty box</b> above the field. Fight far from the CORE and you both sit. You can turn fights off on the menu.</p>
+  <p><b>Fight</b>: punch a rival who isn't carrying. You both have a health bar. Their jabs flash red: block with a glove in front of your face, or move your head. Heavy swings flash gold: only a dodge saves you. After two clean hits they cover up, so hit when the guard drops, or right after you block or dodge (a counter hits much harder). A knockout sends the loser to the <b>penalty box</b> for 15 seconds. In Station Rugby, fight far from the CORE and you both sit. You can turn fights off on the menu.</p>
   <p><b>Aurora shards</b> drift through the level: fly through one and your whole team is faster and stronger for 7 seconds.</p>
 
   <details>

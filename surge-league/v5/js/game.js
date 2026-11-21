@@ -4,7 +4,7 @@
 // hands, or fly into them to start a RUCK and out-squeeze them. Punch a rival who isn't carrying to start a FIGHT: the loser
 // sits in the penalty box. The windows are open: space is part of the field.
 AFRAME.registerComponent('surge-game', {
-  ...TEAMAI, ...BRAWL, ...TRAIN5,
+  ...TEAMAI, ...BRAWL, ...CONTROL, ...TRAIN5,
   init() { this.ready = false; if (this.el.hasLoaded) this.setup(); else this.el.addEventListener('loaded', () => this.setup()); },
 
   setup() {
@@ -17,10 +17,16 @@ AFRAME.registerComponent('surge-game', {
     this.prevButtons = {}; this.keys = {};
     this.track = { left: { real: [], glove: [], tv: 0 }, right: { real: [], glove: [], tv: 0 } };
     this.save = Profiles.init(loadSave());
+    // 2026-11-21: the briefing, the pilot license and the coaching tips belong to each PLAYER now. They used to be saved once per
+    // headset, so the second person to play never got the briefing or the tips. Everyone starts fresh (training takes 3 minutes).
+    if (!this.save.pilots5) { this.save.pilots5 = 1; for (const p of this.save.profiles) p.v5 = { briefed: false, licensed: false, tips: [] }; delete this.save.briefed5; delete this.save.tips5; delete this.save.licensed; writeSave(this.save); }
     this.flight = FLIGHT_MODES.includes(this.save.flight) ? this.save.flight : 'hands';
     this.level = LEVELS[Math.min(LEVELS.length - 1, this.save.level === undefined ? 1 : this.save.level)];
     this.matchCfg = MATCHES[Math.min(MATCHES.length - 1, this.save.match5 === undefined ? 1 : this.save.match5)];
-    this.levelPick = this.save.level5 || 'meridian';
+    // two game modes, each with its own levels and its own remembered pick
+    this.mode = this.save.mode5 === 'control' ? 'control' : 'rugby';
+    this.picks = { rugby: this.save.level5 || 'meridian', control: this.save.levelC || 'gardens' };
+    this.levelPick = this.picks[this.mode]; this.levelScroll = 0; this.zones = [];
     this.fights = this.save.fights !== false;
     this.easy = this.save.reach !== 'full';
     Object.assign(this, { snapArmed: true, pingT: 0, msg: '', msgT: 0, time: 0, tipGap: 0, sightT: 0, energy: ENERGY_MAX, energyIdle: 0, boostT: 0, boostCool: 0, dashT: 0, dashCool: 0,
@@ -33,12 +39,12 @@ AFRAME.registerComponent('surge-game', {
       if (session) session.addEventListener('visibilitychange', () => { this.paused = session.visibilityState === 'hidden'; if (this.paused) this.openPause(); });
       this.calibrateT = 1.2;
     });
-    this.el.addEventListener('exit-vr', () => { this.paused = false; this.setCockpit(0); });
+    this.el.addEventListener('exit-vr', () => { this.paused = false; this.setCockpit(0); this.menuSeenVR = false; });
     if (window.SURGE_GRADE) this.el.renderer.toneMapping = T.CustomToneMapping;
     this.buildBall(); this.buildFx(); this.buildBots(); this.buildPlayerRide(); this.buildMirror(); this.buildPanels();
     this.score = { blue: 0, orange: 0 }; this.matchBots = this.bots; this.state = 'ready'; this.timeLeft = this.matchCfg.secs; this.stats = this.freshStats();
-    this.enterLevel(this.levelPick === 'shuffle' ? LEVELS5[0] : LEVELS5.find(l => l.id === this.levelPick) || LEVELS5[0]);
-    this.resetToMenu();
+    this.enterLevel(this.pickedLevel() || this.modeLevels()[0]);
+    this.resetToMenu(); this.showPick();
     this.ready = true;
   },
   freshStats() { return { goals: 0, deep: 0, tricks: 0, steals: 0, passes: 0, hits: 0, fouls: 0, comet: 0 }; },
@@ -50,7 +56,7 @@ AFRAME.registerComponent('surge-game', {
     if (this.world) {
       // leaving a level: free its meshes and the pictures painted just for it (the shared ones stay)
       const keep = new Set([...Object.values(WTEX), glowTexture(), dotTexture(), shardTexture(), toonGradient()]);
-      for (const g of [this.world.meshes.group, this.world.back.group]) {
+      for (const g of [this.world.meshes.root, this.world.back.group]) {
         scene.remove(g);
         g.traverse(o => { if (o.geometry) o.geometry.dispose(); const m = o.material; if (m) { if (m.map && !keep.has(m.map)) m.map.dispose(); m.dispose(); } });
       }
@@ -67,7 +73,24 @@ AFRAME.registerComponent('surge-game', {
     if (sun) { sun.color.set(th.sun[0]); sun.intensity = th.sun[1]; sun.position.set(...th.sun[2]).multiplyScalar(600); }
     this.world = { level, meshes, back }; this.lvl = level;
     this.ruck = null; this.duels = []; this.playerBin = 0;
+    this.buildZones(level);
   },
+  modeLevels() { return LEVELS5.filter(l => l.mode === this.mode); },
+  pickedLevel() { return this.levelPick === 'shuffle' ? null : this.modeLevels().find(l => l.id === this.levelPick) || null; },
+  winScore() { return this.mode === 'control' ? this.controlTarget() : this.matchCfg.target; },
+  matchLabel() { return this.mode === 'control' ? `${Math.round(this.matchCfg.secs / 60)} MIN · FIRST TO ${this.controlTarget()}` : this.matchCfg.label; },
+  // The level row on the menu shows four cards at a time: slide it so the picked one is on screen.
+  showPick() { const ids = [...this.modeLevels().map(l => l.id), 'shuffle'], i = Math.max(0, ids.indexOf(this.levelPick)); this.levelScroll = Math.max(0, Math.min(ids.length - 4, Math.max(i - 3, Math.min(this.levelScroll, i)))); },
+  // A level that repeats forever up and down: keep the goals and the bots' route points on the copy the core is in.
+  followWorld(reset) {
+    if (!WORLD.loop) return;
+    const was = WORLD.oy;
+    if (!worldFollow(reset ? this.lvl.ball[1] : this.ball.pos.y)) return;
+    for (const b of this.bots) b.path = [];
+    for (const t of ['blue', 'orange']) if (this.brains && this.brains[t]) { this.brains[t].route = null; this.brains[t].decoyRoute = null; }
+    if (reset) { const dy = WORLD.oy - was; for (const b of this.bots) if (b.bin > 0) b.pos.y += dy; if (this.playerBin > 0) this.rig.position.y += dy; }
+  },
+  sightDist() { const s = this.world.meshes.sight.position, P = WORLD.loop; let dy = this.headPos.y - s.y; if (P) dy -= P * Math.round(dy / P); return Math.hypot(this.headPos.x - s.x, dy, this.headPos.z - s.z); },
   // The Backrooms hum: quiet mains tones for as long as you are on that level.
   updateHum() {
     const want = !!this.lvl.theme.hum && !this.paused;
@@ -77,7 +100,7 @@ AFRAME.registerComponent('surge-game', {
       this.hum = { out, os };
     } else if (!want && this.hum) { for (const o of this.hum.os) { try { o.stop(); } catch (e) {} } this.hum.out.disconnect(); this.hum = null; }
   },
-  nextLevel() { const others = LEVELS5.filter(l => l !== this.lvl); return this.levelPick === 'shuffle' ? others[Math.floor(Math.random() * others.length)] : LEVELS5.find(l => l.id === this.levelPick) || LEVELS5[0]; },
+  nextLevel() { const list = this.modeLevels(), others = list.filter(l => l !== this.lvl); return this.pickedLevel() || others[Math.floor(Math.random() * others.length)] || list[0]; },
 
   // ---------------------------------------------------------------- world bits
   buildBall() {
@@ -97,7 +120,7 @@ AFRAME.registerComponent('surge-game', {
   buildPlayerRide() {
     const host = this.$('ride').object3D;
     if (this.rideObj) host.remove(this.rideObj);
-    this.rideObj = buildRide('gym', this.save.licensed ? '#ffd166' : TEAM_COLOR.blue);
+    this.rideObj = buildRide('gym', this.pilot().licensed ? '#ffd166' : TEAM_COLOR.blue);
     this.rideObj.position.y = 0.095; this.rideObj.rotation.y = Math.PI; this.rideObj.scale.setScalar(1.05);
     host.add(this.rideObj);
   },
@@ -135,7 +158,7 @@ AFRAME.registerComponent('surge-game', {
     if (!on || (m.n++ % 2)) return;
     const r = this.el.renderer, head = this.headEl.getObject3D('camera');
     head.getWorldPosition(m.cam.position); head.getWorldQuaternion(m.cam.quaternion); m.cam.rotateY(Math.PI); m.cam.updateMatrixWorld(true);
-    const hide = [m.mesh, m.frame, this.toastPanel.mesh, this.scorePanel.mesh, this.$('cockpit').object3D], was = hide.map(o => o.visible);
+    const hide = [m.mesh, m.frame, this.toastPanel.mesh, this.scorePanel.mesh, this.zonePanel.mesh, this.ruckPanel.mesh, this.$('cockpit').object3D], was = hide.map(o => o.visible);
     hide.forEach(o => (o.visible = false));
     const prevTarget = r.getRenderTarget(), xr = r.xr.enabled;
     r.xr.enabled = false; r.setRenderTarget(m.rt); r.clear(); r.render(this.el.object3D, m.cam); r.setRenderTarget(prevTarget); r.xr.enabled = xr;
@@ -153,13 +176,16 @@ AFRAME.registerComponent('surge-game', {
   flash(msg, secs = 1.4, opts = {}) { if (!msg) return; this.msg = msg; this.msgT = secs; this.msgOpts = opts; },
   edge(name, down) { const was = this.prevButtons[name]; this.prevButtons[name] = down; return down && !was; },
   useEnergy(n) { this.energy = Math.max(0, this.energy - n); this.energyIdle = 0; },
+  // What this player has seen and earned in version 5 (kept on their profile).
+  pilot() { const p = Profiles.current(this.save); return p.v5 || (p.v5 = { briefed: false, licensed: false, tips: [] }); },
   playerLocked() { return this.inRuck('player') || this.inDuel('player') || this.state === 'penalty' || this.playerStun > 0.6; },
 
   // ---------------------------------------------------------------- match flow
   resetToMenu() {
     this.leaveTraining();
-    const want = this.levelPick === 'shuffle' ? this.lvl : LEVELS5.find(l => l.id === this.levelPick) || this.lvl;
+    const want = this.pickedLevel() || (this.lvl.mode === this.mode ? this.lvl : this.modeLevels()[0]);
     if (want !== this.lvl) this.enterLevel(want);
+    this.followWorld(true); this.resetZones();
     this.state = 'ready'; this.penalty = null; this.ruck = null; this.duels = []; this.playerBin = 0; this.sudden = false;
     for (const b of this.bots) { b.ruck = null; b.duel = null; b.bin = 0; }
     this.matchBots = this.bots; this.lineUp(); this.homePlayer();
@@ -172,15 +198,15 @@ AFRAME.registerComponent('surge-game', {
     this.leaveTraining();
     const next = this.nextLevel(); if (next !== this.lvl) { this.enterLevel(next); this.blinkT = 0.4; }
     this.score = { blue: 0, orange: 0 }; this.timeLeft = this.matchCfg.secs; this.result = null; this.stats = this.freshStats(); this.sudden = false;
-    this.penalty = null; this.matchBots = this.bots; this.lastEvent = ''; this.buff = { blue: 0, orange: 0 };
-    for (const b of this.bots) { b.bin = 0; b.obj.visible = true; } this.playerBin = 0;
+    this.penalty = null; this.matchBots = this.bots; this.lastEvent = ''; this.buff = { blue: 0, orange: 0 }; this.resetZones(); this.held = { blue: 0, orange: 0 };
+    for (const b of this.bots) { b.bin = 0; b.obj.visible = true; b.zone = null; b.markOn = null; } this.playerBin = 0;
     this.target.visible = false;
     this.kickoff();
     this.startCountdown(4);
-    this.flash(this.lvl.name, 2.2, { big: true, color: '#ffd166', sub: `${this.matchCfg.label}  ·  ${this.lvl.blurb}` });
+    this.flash(this.lvl.name, 2.2, { big: true, color: '#ffd166', sub: `${this.matchLabel()}  ·  ${this.lvl.blurb}` });
     if (this.inVR) this.calibrate();
   },
-  startCountdown(n) { this.state = 'countdown'; this.countT = n; this.kickTip = KICKOFF_TIPS[this.kickN++ % KICKOFF_TIPS.length]; },
+  startCountdown(n) { const tips = this.mode === 'control' ? CONTROL_TIPS : KICKOFF_TIPS; this.state = 'countdown'; this.countT = n; this.kickTip = tips[this.kickN++ % tips.length]; },
   placePlayer(x, y, z, yaw = 0) { this.rig.position.set(x, y - 1.4, z); this.rig.rotation.set(0, yaw, 0); this.vel.set(0, 0, 0); this.steerDir = null; this.rideTilt = null; this.snapKick = 0; this.dashT = 0; },
   kickoff() {
     const d = this.ball;
@@ -188,6 +214,7 @@ AFRAME.registerComponent('surge-game', {
     d.pos.set(...this.lvl.ball); d.vel.set((Math.random() - 0.5) * 2, (Math.random() - 0.5) * 2, 0);
     if (this.ruck) this.endRuck('offload'); this.ruck = null;
     for (const duel of [...this.duels]) { this.duels.splice(this.duels.indexOf(duel), 1); for (const x of [duel.a, duel.b]) if (x !== 'player') x.duel = null; }
+    this.followWorld(true); d.pos.set(...this.lvl.ball);
     this.lineUp(true); if (!(this.playerBin > 0)) this.homePlayer();
     this.penalty = null; this.energy = ENERGY_MAX; this.playerStun = 0; this.playerGrace = 0; this.charge = null;
   },
@@ -205,16 +232,17 @@ AFRAME.registerComponent('surge-game', {
       if (!this.sudden) this.timeLeft -= dt;
       if (this.timeLeft <= 0 && !this.sudden) {
         this.timeLeft = 0;
-        if (this.score.blue === this.score.orange) { this.sudden = true; this.flash('LEVEL AT TIME!\nNEXT SCORE WINS', 2.5, { big: true, color: '#ffd166' }); beep(440, 400, 0.12, 'square'); this.lastEvent = 'SUDDEN DEATH: next score wins'; }
+        if (Math.floor(this.score.blue) === Math.floor(this.score.orange)) { this.sudden = true; this.flash('LEVEL AT TIME!\nNEXT SCORE WINS', 2.5, { big: true, color: '#ffd166' }); beep(440, 400, 0.12, 'square'); this.lastEvent = 'SUDDEN DEATH: next score wins'; }
         else this.endMatch();
       }
     } else if (this.state === 'penalty') this.updatePenalty(dt);
   },
-  matchOver() { return this.sudden || this.score.blue >= this.matchCfg.target || this.score.orange >= this.matchCfg.target || this.timeLeft <= 0; },
+  matchOver() { return this.sudden || this.score.blue >= this.winScore() || this.score.orange >= this.winScore() || this.timeLeft <= 0; },
   endMatch() {
     this.state = 'over'; this.ruck = null; this.penalty = null; this.duels = []; this.playerBin = 0;
     for (const b of this.bots) { b.ruck = null; b.duel = null; b.bin = 0; }
-    this.result = Profiles.record(this.save, { mode: 'station5', arena: this.lvl.id, realm: 'v5', level: this.level.name, ranked: true, botRating: this.level.rating, scoreFor: this.score.blue, scoreAgainst: this.score.orange, stats: this.stats });
+    this.score.blue = Math.floor(this.score.blue); this.score.orange = Math.floor(this.score.orange);
+    this.result = Profiles.record(this.save, { mode: this.mode === 'control' ? 'control5' : 'station5', arena: this.lvl.id, realm: 'v5', level: this.level.name, ranked: true, botRating: this.level.rating, scoreFor: this.score.blue, scoreAgainst: this.score.orange, stats: this.stats });
     const won = this.score.blue > this.score.orange, draw = this.score.blue === this.score.orange;
     this.homePlayer();
     this.flash(won ? 'YOU WIN!' : draw ? 'DRAW' : 'ORANGE WINS', 3, { big: true, color: won ? '#66ffff' : '#ffd166' });
@@ -297,6 +325,7 @@ AFRAME.registerComponent('surge-game', {
     setListener(this.headPos, this.headFwd);
     this.updateHum();
     if (this.paused) return;
+    updateMovers(this.time, dt);
     if (inp.inVR && this.calibrateT > 0 && (this.calibrateT -= dt) <= 0) this.calibrate();
     this.pingT -= dt; this.msgT = Math.max(0, this.msgT - dt); this.callT = Math.max(0, this.callT - dt);
     if (inp.inVR && !this.inVRBefore) this.prevButtons = {};
@@ -313,7 +342,9 @@ AFRAME.registerComponent('surge-game', {
     this.live = live;
     this.movePlayer(inp, dt, live);
     this.updateBall(inp, dt);
+    if (live || this.state === 'penalty') this.followWorld();
     if (this.state === 'training') this.updateTraining(inp, dt); else this.updateBots(dt, live);
+    if (this.zones.length) this.updateZones(dt, live);
     if (live) {
       this.contacts(dt); if (this.state === 'playing') this.botSteals(dt);
       this.updateRuck(inp, dt); this.updateFights(inp, dt, live); this.updateBin(dt); this.updateSight(dt); this.updateAurora(dt);
@@ -445,7 +476,7 @@ AFRAME.registerComponent('surge-game', {
     let best = null, bestAng = PASS_ANGLE;
     for (const b of this.matchBots) { if (b.team !== 'blue' || !this.free(b)) continue; tmp.subVectors(b.pos, h.aimOrigin).setY(tmp.y + 1); if (tmp.length() > PASS_RANGE) continue; const ang = h.dir.angleTo(tmp); if (ang < bestAng) { bestAng = ang; best = b; } }
     // pointing closer to an open goal than to that teammate: you meant to shoot
-    if (best) for (const g of WORLD.goals) { if (g.team === 'blue') continue; tmp.subVectors(g.c, h.aimOrigin); if (tmp.dot(g.n) < 0 && tmp.length() < 40 && h.dir.angleTo(tmp) < Math.min(bestAng, EASY_ASSIST)) return null; }
+    if (best && this.state !== 'training') for (const g of WORLD.goals) { if (g.team === 'blue') continue; tmp.subVectors(g.c, h.aimOrigin); if (tmp.dot(g.n) < 0 && tmp.length() < 40 && h.dir.angleTo(tmp) < Math.min(bestAng, EASY_ASSIST)) return null; }
     return best;
   },
   bestMate() {
@@ -639,7 +670,7 @@ AFRAME.registerComponent('surge-game', {
           if (a === 'player' || b === 'player') { this.impactFlash = Math.min(1, closing / 10); for (const h of this.hands || []) pulse(h, Math.min(1, 0.4 + closing / 14), 70); }
           for (const [x, k] of [[a, ka], [b, kb]]) if (x !== 'player' && k > 1) x.stun = Math.max(x.stun, 0.35);
         }
-        if (ta !== tb && closing > FOUL_SPEED && this.state === 'playing' && d.holder !== a && d.holder !== b && d.pos.distanceTo(pa) > FOUL_BALL_R && d.pos.distanceTo(pb) > FOUL_BALL_R) {
+        if (ta !== tb && closing > FOUL_SPEED && this.state === 'playing' && this.mode !== 'control' && d.holder !== a && d.holder !== b && d.pos.distanceTo(pa) > FOUL_BALL_R && d.pos.distanceTo(pb) > FOUL_BALL_R) {
           const sa = va.dot(n) + jImp * ka, sb = -(vb.dot(n) - jImp * kb), hitter = sa >= sb ? a : b, victim = hitter === a ? b : a;
           if ((hitter === a ? sa : sb) > FOUL_SPEED * 0.7) { if (hitter === 'player') this.stats.fouls++; this.awardPenalty(this.teamOf(victim), victim, `LATE HIT by ${this.nameOf(hitter)}`); }
         }
@@ -657,7 +688,7 @@ AFRAME.registerComponent('surge-game', {
     if (this.ruck) this.endRuck('offload'); this.ruck = null;
     this.state = 'penalty'; this.penalty = { team, shooter, t: PENALTY_TIME, shot: false, after: 0, spot };
     // everyone else waits round the kickoff spot
-    const c = new T.Vector3(...this.lvl.ball); let i = 0;
+    const c = new T.Vector3(...this.lvl.ball); c.y += WORLD.oy; let i = 0;
     for (const b of this.matchBots) {
       if (b.bin > 0) continue;
       if (b === shooter) { b.pos.copy(spot).add(new T.Vector3(0, -0.9, 0)); b.facing.copy(g.n).negate(); b.vel.set(0, 0, 0); continue; }
@@ -683,7 +714,7 @@ AFRAME.registerComponent('surge-game', {
 
   // ---------------------------------------------------------------- sight ring and aurora shards
   updateSight(dt) {
-    const inside = this.headPos.distanceTo(this.world.meshes.sight.position) < 1.1;
+    const inside = this.sightDist() < (this.state === 'training' ? 2.0 : 1.4);
     if (inside) { if (this.sightT <= 0) { beep(990, 90, 0.06); beep(1320, 120, 0.05, 'sine', 0.08); this.flash('SIGHT RING: everyone shows through the walls', 1.6, { color: '#9ff6ff' }); } this.sightT = 1.2; }
     else this.sightT = Math.max(0, this.sightT - dt);
     this.inSight = inside;
@@ -720,7 +751,7 @@ AFRAME.registerComponent('surge-game', {
 
   // ---------------------------------------------------------------- coaching tips
   tip(id, force) {
-    const tips = this.save.tips5 || (this.save.tips5 = []);
+    const tips = this.pilot().tips;
     if (tips.includes(id) || (!force && this.tipGap > 0) || !TIPS[id]) return;
     const text = TIPS[id][this.inVR ? 0 : 1]; if (!text) return;
     tips.push(id); writeSave(this.save);
@@ -730,6 +761,11 @@ AFRAME.registerComponent('surge-game', {
   coach(inp, dt) {
     this.tipGap = Math.max(0, this.tipGap - dt);
     const played = this.matchCfg.secs - this.timeLeft, d = this.ball;
+    if (this.mode === 'control') {
+      if (played > 2) this.tip('zone'); if (played > 8) this.tip('steer'); if (played > 14) this.tip('zcore'); if (played > 22) this.tip('dash'); if (played > 30) this.tip('zscore');
+      if (d.holder === null && d.pos.distanceTo(this.headPos) < 15) this.tip('grab'); if (played > 40 && this.fights) this.tip('punch'); if (played > 55) this.tip('rear');
+      return;
+    }
     if (played > 2) this.tip('steer');
     if (played > 6) this.tip('turn');
     if (played > 10) this.tip('boost');
@@ -754,6 +790,7 @@ AFRAME.registerComponent('surge-game', {
     const ytag = labelSprite('Y  PAUSE', { color: '#ffffff', bg: 'rgba(8,18,31,0.6)', height: 0.045 }); ytag.position.set(0, 0.11, 0); this.gloveEls.left.object3D.add(ytag);
     this.scorePanel = new UIPanel(SCORE_W, SCORE_H, 1000, { onTop: true, order: 900 }); this.$('hud').object3D.add(this.scorePanel.mesh); this.scorePanel.setOpacity(0);
     this.toastPanel = new UIPanel(1.5, 0.5, 700, { onTop: true, order: 1003 }); this.rig.add(this.toastPanel.mesh); this.toastPanel.setOpacity(0);
+    this.zonePanel = new UIPanel(0.7, 0.13, 1000, { onTop: true, order: 1002 }); this.headEl.object3D.add(this.zonePanel.mesh); this.zonePanel.mesh.position.set(0, -0.44, -1.15); this.zonePanel.setOpacity(0);
     this.ruckPanel = new UIPanel(0.9, 0.26, 800, { onTop: true, order: 1004 }); this.headEl.object3D.add(this.ruckPanel.mesh); this.ruckPanel.mesh.position.set(0, -0.3, -1); this.ruckPanel.setOpacity(0);
     this.lasers = {};
     for (const side of ['left', 'right']) { const beam = this.makeBeam(0x66ffff, 0.7, 0.004), dot = glowSprite('#ffffff', 0.05, 1); dot.visible = false; this.el.object3D.add(dot); this.lasers[side] = { beam, dot }; }
@@ -768,7 +805,7 @@ AFRAME.registerComponent('surge-game', {
     }
     this.raycaster = new T.Raycaster();
   },
-  showPanels(which) { this.menuPanel.mesh.visible = which === 'menu'; this.pausePanel.mesh.visible = which === 'pause'; this.helpPanel.mesh.visible = which === 'help'; },
+  showPanels(which) { this.menuPanel.mesh.visible = which === 'menu'; this.pausePanel.mesh.visible = which === 'pause'; this.helpPanel.mesh.visible = which === 'help'; for (const z of this.zones) z.tag.visible = !which; },
   pointAt(inp, panels) {
     let hover = null, click = null;
     for (const side of ['left', 'right']) { this.lasers[side].beam.visible = false; this.lasers[side].dot.visible = false; }
@@ -805,22 +842,34 @@ AFRAME.registerComponent('surge-game', {
   },
   placeMenu(follow) {
     const m = this.$('menu').object3D;
-    if (!follow) { m.position.set(0, 1.22, -1.55); m.rotation.set(0, 0, 0); return; }
+    this.menuLostT = 0;
+    if (!this.inVR) { m.position.set(0, 1.22, -1.55); m.rotation.set(0, 0, 0); return; }
     const a = this.rig.worldToLocal(this.headPos.clone()), f = this.rig.worldToLocal(this.headPos.clone().add(this.headFwd)).sub(a), yaw = Math.atan2(-f.x, -f.z);
-    m.rotation.set(0, yaw, 0); m.position.set(-Math.sin(yaw) * 1.4, 1.22, -Math.cos(yaw) * 1.4);
+    m.rotation.set(0, yaw, 0); m.position.set(a.x - Math.sin(yaw) * 1.5, Math.max(0.75, Math.min(1.7, a.y - 0.3)), a.z - Math.cos(yaw) * 1.5);
+  },
+  // In the headset a menu must never be somewhere you are not looking: if it has been out of view (or out of reach) for a
+  // moment, it comes round to the front again.
+  keepMenuInView(dt) {
+    if (!this.inVR) return;
+    const m = this.$('menu').object3D, a = this.rig.worldToLocal(this.headPos.clone()), f = this.rig.worldToLocal(this.headPos.clone().add(this.headFwd)).sub(a);
+    const to = m.position.clone().sub(a), dist = Math.hypot(to.x, to.z); f.y = 0; to.y = 0;
+    const off = f.lengthSq() > 1e-4 && to.lengthSq() > 1e-4 ? f.angleTo(to) : 0;
+    this.menuLostT = off > 0.95 || dist > 2.4 || dist < 0.8 ? (this.menuLostT || 0) + dt : 0;
+    if (this.menuLostT > 0.9 || !this.menuSeenVR) { this.menuSeenVR = true; this.placeMenu(true); }
   },
   // How to play: short pages you flip through. Reading them once (or doing the training) is what PLAY asks of a new pilot.
   openHelp(then) { this.helpOpen = true; this.helpPage = 0; this.helpKey = ''; this.afterHelp = then || null; this.armX = this.armY = false; this.placeMenu(this.pauseOpen); beep(600, 60, 0.06); },
   updateHelp(inp) {
-    const panel = this.helpPanel, key = `${this.inVR}:${this.helpPage}:${this.lvl.id}`;
-    if (key !== this.helpKey) { this.helpKey = key; const m = { inVR: this.inVR, page: this.helpPage, level: this.lvl, target: this.matchCfg.target, first: !this.save.briefed5 }; panel.set((g, W, H, p) => paintBriefing5(g, W, H, p, m)); }
+    this.keepMenuInView(0.016);
+    const panel = this.helpPanel, key = `${this.inVR}:${this.helpPage}:${this.lvl.id}:${this.mode}`;
+    if (key !== this.helpKey) { this.helpKey = key; const m = { inVR: this.inVR, page: this.helpPage, level: this.lvl, target: this.winScore(), mode: this.state === 'training' ? 'rugby' : this.mode, first: !this.pilot().briefed }; panel.set((g, W, H, p) => paintBriefing5(g, W, H, p, m)); }
     panel.update();
     const { hover, click } = this.pointAt(inp, [panel]), moved = this.stickNav(inp, panel, this.focus);
     const def = panel.buttons.find(b => b.id === 'next') || panel.buttons[0];
     const shown = hover ? hover.btn : moved || panel.buttons.find(b => b.row === this.focus.row && b.col === this.focus.col) || def;
     panel.highlight(shown, '#66ffff');
     const pick = click ? click.btn : inp.start ? shown : null;
-    const close = done => { this.helpOpen = false; if (done) { this.save.briefed5 = true; writeSave(this.save); } if (!this.pauseOpen) this.placeMenu(false); this.armX = this.armY = false; this.menuKey = ''; };
+    const close = done => { this.helpOpen = false; if (done) { this.pilot().briefed = true; writeSave(this.save); } if (!this.pauseOpen) this.placeMenu(false); this.armX = this.armY = false; this.menuKey = ''; };
     if (inp.pausePress) { const then = this.afterHelp; close(true); if (then === 'play') this.newMatch(); return; }   // closing early never nags you twice
     if (!pick) return;
     beep(700, 60, 0.06);
@@ -833,10 +882,11 @@ AFRAME.registerComponent('surge-game', {
   openPause() { if (!this.canPause() || this.pauseOpen) return; this.pauseOpen = true; this.pauseFocus = { row: 0, col: 0 }; this.armX = this.armY = false; this.pauseKey = ''; this.placeMenu(true); beep(500, 80, 0.08); },
   closePause(quiet) { this.pauseOpen = false; this.placeMenu(false); if (!quiet) beep(700, 80, 0.08); },
   updatePause(inp) {
+    this.keepMenuInView(0.016);
     const panel = this.pausePanel, key = `${this.score.blue}:${this.score.orange}:${this.inVR}:${this.easy}:${this.flight}:${this.state}:${this.save.turnFollow}`;
     if (key !== this.pauseKey) {
       this.pauseKey = key;
-      const model = { blue: this.score.blue, orange: this.score.orange, inVR: this.inVR, training: this.state === 'training', where: `${this.lvl.name}  ·  ${this.matchCfg.label}`,
+      const model = { blue: this.score.blue, orange: this.score.orange, inVR: this.inVR, training: this.state === 'training', mode: this.mode, where: `${this.lvl.name}  ·  ${this.matchLabel()}`,
                       reach: this.inVR ? `ARMS: ${this.easy ? 'EASY REACH (point + trigger)' : 'FULL MOTION (swing to throw)'}` : 'ARMS: EASY REACH (PC)', flight: FLIGHT_LABEL[this.flight],
                       turn: this.save.turnFollow === false ? 'TURN: SNAP ONLY (RIGHT STICK)' : 'TURN: SNAP + FOLLOW YOUR HEAD', exitLabel: window.SURGE_APP ? 'QUIT SURGE LEAGUE' : 'EXIT TO HOME SCREEN', versionLabel: `PLAY ${VERSION_LINK.label}` };
       panel.set((g, W, H, p) => paintPause5(g, W, H, p, model));
@@ -851,6 +901,7 @@ AFRAME.registerComponent('surge-game', {
     if (!pick) return;
     if (pick.id === 'resume') this.closePause();
     else if (pick.id === 'help') this.openHelp();
+    else if (pick.id === 'skip') { this.closePause(true); this.skipStep(); }
     else if (pick.id === 'reach') { if (this.inVR) { this.easy = !this.easy; this.save.reach = this.easy ? 'easy' : 'full'; writeSave(this.save); beep(640, 70, 0.06); } }
     else if (pick.id === 'flight') { this.flight = FLIGHT_MODES[(FLIGHT_MODES.indexOf(this.flight) + 1) % FLIGHT_MODES.length]; this.save.flight = this.flight; writeSave(this.save); beep(640, 70, 0.06); }
     else if (pick.id === 'turn') { this.save.turnFollow = this.save.turnFollow === false; writeSave(this.save); beep(640, 70, 0.06); }
@@ -872,13 +923,15 @@ AFRAME.registerComponent('surge-game', {
     if (!btn) return 'Point at anything to learn about it.';
     const p = Profiles.current(this.save);
     switch (btn.id) {
-      case 'play': return this.save.briefed5 || this.save.licensed ? `8 vs 8 on ${this.levelPick === 'shuffle' ? 'a surprise level' : this.lvl.name}. ${this.matchCfg.label}. You fly for BLUE.` : 'First time: a 60-second briefing, then straight into the match.';
-      case 'train': return this.save.licensed ? 'Fly the training again: every control, one step at a time.' : 'Earn your PILOT LICENSE: every control, one step at a time. Licensed pilots fly a gold board.';
+      case 'play': return this.pilot().briefed ? `${MODES5.find(x => x.id === this.mode).name}, 8 vs 8 on ${this.levelPick === 'shuffle' ? 'a surprise level' : this.lvl.name}. ${this.matchLabel()}. You fly for BLUE.` : 'First time: a 60-second briefing, then straight into the match.';
+      case 'mode': return this.mode === 'rugby' ? 'Switch to ZONE CONTROL: no goals. Five rings to hold, two of them on moving platforms. New maps.' : 'Switch to STATION RUGBY: get the CORE into their goals.';
+      case 'scroll-l': case 'scroll-r': return 'More levels this way.';
+      case 'train': return this.pilot().licensed ? 'Fly the training again: every control, one step at a time.' : 'Earn your PILOT LICENSE: every control, one step at a time. Licensed pilots fly a gold board.';
       case 'help': return 'The rules, a map of this level, both controllers, rucks, fights and the penalty box.';
-      case 'level': return btn.value === 'shuffle' ? 'A different level every match.' : LEVELS5.find(l => l.id === btn.value).blurb;
+      case 'level': return btn.value === 'shuffle' ? 'A different level every match.' : `${LEVELS5.find(l => l.id === btn.value).name}. ${LEVELS5.find(l => l.id === btn.value).blurb}`;
       case 'bots': return `Bot strength ${this.level.rating}: how fast they fly, how well they aim, how hard they grip and punch.`;
-      case 'length': return 'First team to the target wins. If the clock runs out first, most points wins; level means next score wins.';
-      case 'fights': return this.fights ? 'Fights are ON: punch a rival who isn\'t carrying, first to 3, loser sits in the penalty box.' : 'Fights are OFF: no punching, nobody goes to the penalty box.';
+      case 'length': return this.mode === 'control' ? 'First team to the target wins. Each ring you hold pays a point every 2 seconds; all five pay double.' : 'First team to the target wins. If the clock runs out first, most points wins; level means next score wins.';
+      case 'fights': return this.fights ? 'Fights are ON: punch a rival who isn\'t carrying. Block, dodge, counter. A knockout sends them to the penalty box.' : 'Fights are OFF: no punching, nobody goes to the penalty box.';
       case 'player-prev': case 'player-next': return `Switch player. ${p.name}: ${p.wins} wins, ${p.losses} losses, ${p.draws} draws.`;
       case 'player-new': return 'Add a new player on this headset. Rename players on the 2D page.';
       case 'version': return VERSION_LINK.hint;
@@ -888,31 +941,42 @@ AFRAME.registerComponent('surge-game', {
   },
   menuModel() {
     const p = Profiles.current(this.save), r = this.state === 'over' && this.result;
-    return { inVR: this.inVR, level: this.level.name, length: this.matchCfg.label, versionLabel: VERSION_LINK.label, levelPick: this.levelPick, fights: this.fights, licensed: !!this.save.licensed, briefed: !!this.save.briefed5,
+    return { inVR: this.inVR, level: this.level.name, length: this.matchLabel(), versionLabel: VERSION_LINK.label, levelPick: this.levelPick, fights: this.fights, mode: this.mode, scroll: this.levelScroll, levels: this.modeLevels().map(l => l.id), licensed: !!this.pilot().licensed, briefed: !!this.pilot().briefed,
              profile: { name: p.name, sub: `${Profiles.rank(p.rating).name} ${Math.round(p.rating)}   ·   W${p.wins}  L${p.losses}  D${p.draws}` },
              result: r ? { blue: this.score.blue, orange: this.score.orange, line1: `Surge Score ${r.surge}${r.newBest ? ' (new best!)' : ''}   ·   Rank ${r.rank} ${Math.round(r.rating)}${r.delta ? ` (${r.delta > 0 ? '+' : ''}${r.delta})` : ''}   ·   Goals ${this.stats.goals}  Steals ${this.stats.steals}  Passes ${this.stats.passes}  Rucks and fights won ${this.stats.hits}` } : null };
   },
   menuAction(btn) {
-    if (btn.id === 'play') { if (!this.save.briefed5 && !this.save.licensed) return this.openHelp('play'); this.newMatch(); return; }
+    if (btn.id === 'play') { if (!this.pilot().briefed) return this.openHelp('play'); this.newMatch(); return; }
     if (btn.id === 'train') { this.startTraining(); return; }
     if (btn.id === 'help') return this.openHelp();
     if (btn.id === 'version') return this.leaveTo(VERSION_LINK.url);
     if (btn.id === 'home') return this.exitGame();
-    if (btn.id === 'level') { this.levelPick = btn.value; this.save.level5 = btn.value; if (btn.value !== 'shuffle' && this.lvl.id !== btn.value) { this.enterLevel(LEVELS5.find(l => l.id === btn.value)); this.resetToMenu(); this.helpOpen = false; } }
+    if (btn.id === 'scroll-l' || btn.id === 'scroll-r') { this.levelScroll = Math.max(0, Math.min(this.modeLevels().length + 1 - 4, this.levelScroll + (btn.id === 'scroll-r' ? 1 : -1))); beep(600, 40, 0.05); return; }
+    if (btn.id === 'mode') {
+      this.mode = this.mode === 'rugby' ? 'control' : 'rugby'; this.save.mode5 = this.mode; this.levelPick = this.picks[this.mode]; this.levelScroll = 0; this.showPick();
+      this.enterLevel(this.pickedLevel() || this.modeLevels()[0]); this.resetToMenu(); this.helpOpen = false; this.blinkT = 0.3;
+    }
+    else if (btn.id === 'level') {
+      this.levelPick = this.picks[this.mode] = btn.value; this.save[this.mode === 'control' ? 'levelC' : 'level5'] = btn.value;
+      if (btn.value !== 'shuffle' && this.lvl.id !== btn.value) { this.enterLevel(LEVELS5.find(l => l.id === btn.value)); this.resetToMenu(); this.helpOpen = false; this.blinkT = 0.3; }
+    }
     else if (btn.id === 'bots') { const i = (LEVELS.indexOf(this.level) + 1) % LEVELS.length; this.level = LEVELS[i]; this.save.level = i; }
     else if (btn.id === 'length') { const i = (MATCHES.indexOf(this.matchCfg) + 1) % MATCHES.length; this.matchCfg = MATCHES[i]; this.save.match5 = i; this.timeLeft = this.matchCfg.secs; }
     else if (btn.id === 'fights') { this.fights = !this.fights; this.save.fights = this.fights; }
-    else if (btn.id === 'player-prev' || btn.id === 'player-next') { const list = this.save.profiles, i = list.findIndex(x => x.id === this.save.active); this.save.active = list[(i + (btn.id === 'player-next' ? 1 : -1) + list.length) % list.length].id; }
-    else if (btn.id === 'player-new') { const np = Profiles.make(`PLAYER ${this.save.profiles.length + 1}`); this.save.profiles.push(np); this.save.active = np.id; this.flash(`Welcome, ${np.name}!`, 2); }
+    else if (btn.id === 'player-prev' || btn.id === 'player-next') { const list = this.save.profiles, i = list.findIndex(x => x.id === this.save.active); this.save.active = list[(i + (btn.id === 'player-next' ? 1 : -1) + list.length) % list.length].id; this.buildPlayerRide(); }
+    else if (btn.id === 'player-new') { const np = Profiles.make(`PLAYER ${this.save.profiles.length + 1}`); this.save.profiles.push(np); this.save.active = np.id; this.buildPlayerRide(); this.flash(`Welcome, ${np.name}!`, 2); }
     writeSave(this.save); beep(700, 50, 0.06);
   },
   updateMenu(inp) {
+    this.keepMenuInView(0.016);
     const panel = this.menuPanel, model = this.menuModel(), key = JSON.stringify(model);
     if (key !== this.menuKey) { this.menuKey = key; panel.set((g, W, H, p) => paintMenu5(g, W, H, p, model)); }
     panel.update();
     const { hover, click } = this.pointAt(inp, [panel]);
     if (hover) { this.focus.row = hover.btn.row; this.focus.col = hover.btn.col; }
-    this.stickNav(inp, panel, this.focus);
+    const moved = this.stickNav(inp, panel, this.focus);
+    // stick onto an arrow at the end of the level row: slide the row instead of stopping on the arrow
+    if (moved && (moved.id === 'scroll-l' || moved.id === 'scroll-r')) { const dir = moved.id === 'scroll-r' ? 1 : -1; this.menuAction(moved); this.focus.col = dir > 0 ? 4 : 1; }
     const focused = panel.buttons.find(b => b.row === this.focus.row && b.col === this.focus.col) || panel.buttons[0], shown = hover ? hover.btn : focused;
     panel.highlight(shown, '#66ffff');
     const hint = this.msgT > 0 && this.state !== 'over' ? this.msg : this.menuHint(shown);
@@ -942,10 +1006,13 @@ AFRAME.registerComponent('surge-game', {
       b.obj.visible = true; b.obj.position.copy(b.pos); b.obj.lookAt(tmp.copy(b.pos).add(tmp2.copy(b.facing).setY(b.facing.y * 0.4)));
       animateRider(b, dt, this.time, d.pos);
       b.punchT = Math.max(0, (b.punchT || 0) - dt); b.hitT = Math.max(0, (b.hitT || 0) - dt * 3);
-      const duel = b.duel, winding = duel && duel.wind && (duel.a === 'player' || duel.b === 'player'), wrestle = b.ruck ? Math.sin(this.time * 18 + b.idx) * 0.4 : 0;
-      b.arm.rotation.x = b.punchT > 0 ? -1.6 * Math.sin((1 - b.punchT / 0.25) * Math.PI) : winding ? 0.9 : b.ruck ? -1.1 + wrestle : duel ? -0.9 + Math.sin(this.time * 9 + b.idx) * 0.25 : d.holder === b ? -0.5 : b.reachT > 0 ? -1.3 : 0;
+      // in a fight with you: the arm goes back before a punch (further for a heavy one), comes up across the chest on guard
+      const duel = b.duel, wind = duel && duel.bot === b ? duel.wind : null, winding = !!wind, heavy = wind && wind.kind === 'heavy', guard = duel && duel.bot === b && duel.guardT > 0 && !wind;
+      const wrestle = b.ruck ? Math.sin(this.time * 18 + b.idx) * 0.4 : 0;
+      b.arm.rotation.x = b.punchT > 0 ? -1.6 * Math.sin((1 - b.punchT / 0.25) * Math.PI) : winding ? (heavy ? 1.5 : 0.9) * Math.min(1, (wind.t0 - wind.t) / 0.15) : guard ? -1.75 : b.ruck ? -1.1 + wrestle : duel ? -0.9 + Math.sin(this.time * 9 + b.idx) * 0.25 : d.holder === b ? -0.5 : b.reachT > 0 ? -1.3 : 0;
+      b.arm.rotation.z = guard ? 0.75 : 0;
       const aura = this.buff[b.team] > 0 ? 0.18 + 0.1 * Math.sin(this.time * 6 + b.idx) : 0;
-      if (winding) b.suitMat.emissive.setRGB(0.7, 0.05, 0.1); else if (aura) b.suitMat.emissive.set(cols[0]).multiplyScalar(aura); else b.suitMat.emissive.setScalar(Math.max(b.hitT * 0.8, b.ruck ? 0.12 + Math.abs(wrestle) * 0.25 : b.stun > 0 ? 0.2 : 0));
+      if (heavy) b.suitMat.emissive.setRGB(0.9, 0.62, 0.05).multiplyScalar(0.6 + 0.4 * Math.sin(this.time * 30)); else if (winding) b.suitMat.emissive.setRGB(0.7, 0.05, 0.1); else if (guard) b.suitMat.emissive.setRGB(0.05, 0.12, 0.3); else if (aura) b.suitMat.emissive.set(cols[0]).multiplyScalar(aura); else b.suitMat.emissive.setScalar(Math.max(b.hitT * 0.8, b.ruck ? 0.12 + Math.abs(wrestle) * 0.25 : b.stun > 0 ? 0.2 : 0));
       const dist = b.pos.distanceTo(this.headPos);
       b.tag.visible = dist < 26; b.xray.visible = this.sightT > 0; b.carryRing.visible = d.holder === b; if (b.carryRing.visible) b.carryRing.rotation.z += dt * 3;
       // the arm they reach with
@@ -964,7 +1031,8 @@ AFRAME.registerComponent('surge-game', {
     const st = this.world.meshes;
     st.sightRings.forEach((ring, i) => { ring.rotation.x += dt * (0.3 + i * 0.15); ring.rotation.y += dt * (0.2 + i * 0.1); });
     st.ringMat.color.set(this.inSight ? '#66ffff' : '#e8f4ff'); st.sightGlow.material.opacity = this.inSight ? 0.7 : 0.25 + Math.sin(this.time * 2) * 0.05;
-    this.world.back.update(dt, this.time);
+    this.world.back.update(dt, this.time); this.world.meshes.update(dt, this.time, this.headPos.y);
+    if (WORLD.loop) this.world.back.group.position.y = this.headPos.y;
     const fadeM = this.fadeMat(); this.blinkT = Math.max(0, (this.blinkT || 0) - dt);
     if (fadeM) { if (this.blinkT > 0) { fadeM.color.set('#000000'); fadeM.opacity = Math.min(1, this.blinkT * 4); } else if (this.hurtFlash > 0.02) { fadeM.color.set('#c0141e'); fadeM.opacity = this.hurtFlash * 0.45; } else fadeM.opacity = 0; }
     this.pointLocator(this.ballArrow, d.pos, d.holder === null ? '#ffffff' : TEAM_COLOR[this.teamOf(d.holder)], inPlay && d.holder !== 'player');
@@ -974,7 +1042,7 @@ AFRAME.registerComponent('surge-game', {
       gloveObj.visible = !!h;
       if (!h) { arm.visible = false; aim.visible = false; continue; }
       gloveObj.position.copy(this.rig.worldToLocal(h.glove.clone())); this.setBeam(arm, h.shoulder, h.glove);
-      const gm = this.gloveEls[side].getObject3D('mesh'), gc = this.buff.blue > 0 ? cols[0] : this.save.licensed ? '#ffd166' : '#66ffff';
+      const gm = this.gloveEls[side].getObject3D('mesh'), gc = this.buff.blue > 0 ? cols[0] : this.pilot().licensed ? '#ffd166' : '#66ffff';
       if (gm && gm.userData.c !== gc) { gm.userData.c = gc; gm.material.color.set(gc); gm.material.emissive.set(gc); }
       if (this.easy && inPlay) this.setBeam(aim, h.glove, h.glove.clone().addScaledVector(h.dir, 15)); else aim.visible = false;
     }
@@ -1002,8 +1070,10 @@ AFRAME.registerComponent('surge-game', {
     this.scoreAlpha = (this.scoreAlpha || 0) + ((want ? 1 : 0) - (this.scoreAlpha || 0)) * Math.min(1, dt * (want ? 10 : 4));
     this.scorePanel.setOpacity(this.scoreAlpha);
     const tl = Math.max(0, this.timeLeft), m = Math.floor(tl / 60), sec = String(Math.floor(tl % 60)).padStart(2, '0'), d = this.ball, who = d.holder ? this.teamOf(d.holder) : null;
-    const sb = { blue: this.score.blue, orange: this.score.orange, clock: this.sudden ? 'NEXT' : `${m}:${sec}`, clockWarn: this.timeLeft < 10 || this.sudden, mode: `FIRST TO ${this.matchCfg.target}`, realm: this.lvl.name,
-                 power: d.holder === 'player' ? 'YOU HAVE THE CORE' : who === 'blue' ? 'BLUE HAS THE CORE' : who ? 'ORANGE HAS THE CORE' : 'LOOSE CORE', powerReady: who === 'blue', event: this.buff.blue > 0 ? `AURORA ${Math.ceil(this.buff.blue)}s` : this.lastEvent };
+    const ctl = this.mode === 'control' && this.state !== 'training';
+    const sb = { blue: Math.floor(this.score.blue), orange: Math.floor(this.score.orange), clock: this.sudden ? 'NEXT' : `${m}:${sec}`, clockWarn: this.timeLeft < 10 || this.sudden, mode: `FIRST TO ${this.winScore()}`, realm: this.lvl.name,
+                 power: d.holder === 'player' ? (ctl ? 'YOU HAVE THE CORE: you count as 3' : 'YOU HAVE THE CORE') : who === 'blue' ? 'BLUE HAS THE CORE' : who ? 'ORANGE HAS THE CORE' : 'LOOSE CORE', powerReady: who === 'blue',
+                 event: this.buff.blue > 0 ? `AURORA ${Math.ceil(this.buff.blue)}s` : ctl && this.held ? `RINGS: BLUE ${this.held.blue}  ·  ORANGE ${this.held.orange}` : this.lastEvent };
     const key = JSON.stringify(sb);
     if (this.scoreAlpha > 0.01 && key !== this.scoreKey) { this.scoreKey = key; this.scorePanel.set((g, W, H, p) => paintScoreboard(g, W, H, p, sb)); }
     this.scorePanel.update();
@@ -1023,13 +1093,22 @@ AFRAME.registerComponent('surge-game', {
     // ruck or fight meter
     const r = this.ruck, mineR = r && this.inRuck('player'), duel = this.duels.find(x => x.a === 'player' || x.b === 'player');
     const show = mineR || duel;
+    // ZONE CONTROL: the five rings and both scores, low in your view the whole match
+    const zshow = ctl && !inMenu && !show && (this.state === 'playing' || this.state === 'countdown');
+    this.zoneAlpha = (this.zoneAlpha || 0) + ((zshow ? 1 : 0) - (this.zoneAlpha || 0)) * Math.min(1, dt * 8); this.zonePanel.setOpacity(this.zoneAlpha * 0.92);
+    if (ctl && this.zoneAlpha > 0.01) {
+      const zm = { blue: Math.floor(this.score.blue), orange: Math.floor(this.score.orange), zones: this.zones.map(z => ({ id: z.id, own: z.own, cap: Math.round(z.cap * 12) / 12, me: z === this.myZone, fight: z.n.blue > 0 && z.n.orange > 0 })) };
+      const zk = JSON.stringify(zm); if (zk !== this.zoneKey) { this.zoneKey = zk; this.zonePanel.set((g, W, H, p) => paintZones(g, W, H, p, zm)); }
+      this.zonePanel.update();
+    }
     this.ruckAlpha = (this.ruckAlpha || 0) + ((show ? 1 : 0) - (this.ruckAlpha || 0)) * Math.min(1, dt * 10); this.ruckPanel.setOpacity(this.ruckAlpha);
     if (mineR) {
       const A = r.A.includes('player'), cm = { kind: 'ruck', you: Math.round((A ? r.p : -r.p) * 40) / 40, inVR: this.inVR, carrier: r.b === 'player', strip: this.teamOf('player') !== this.teamOf(r.b), mine: (A ? r.A : r.B).length, theirs: (A ? r.B : r.A).length, squeeze: this.lastSqueeze || 0 };
       const ck = JSON.stringify(cm); if (ck !== this.ruckKey) { this.ruckKey = ck; this.ruckPanel.set((g, W, H, p) => paintRuck(g, W, H, p, cm)); }
       this.ruckPanel.update();
     } else if (duel) {
-      const A = duel.a === 'player', cm = { kind: 'duel', you: duel.hits[A ? 0 : 1], them: duel.hits[A ? 1 : 0], wind: !!duel.wind, inVR: this.inVR, off: duel.offBall };
+      const A = duel.a === 'player', q = v => Math.ceil(v / 4) * 4;
+      const cm = { kind: 'duel', you: q(duel.hp[A ? 0 : 1]), them: q(duel.hp[A ? 1 : 0]), cue: duel.wind ? duel.wind.kind : duel.counterT > 0 ? 'counter' : duel.guardT > 0 ? 'guard' : 'open', secs: Math.ceil(DUEL_TIME - duel.t), inVR: this.inVR, off: duel.offBall };
       const ck = JSON.stringify(cm); if (ck !== this.ruckKey) { this.ruckKey = ck; this.ruckPanel.set((g, W, H, p) => paintRuck(g, W, H, p, cm)); }
       this.ruckPanel.update();
     }

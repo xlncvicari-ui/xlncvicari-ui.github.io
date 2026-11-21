@@ -4,8 +4,11 @@
 //        (up to RUCK_MAX a side), so the team that stays together is stronger. Your strength is how many triggers and grips you
 //        are squeezing (0 to 4). If your side doesn't have the core, fluttering the triggers strips it faster. The carrier can
 //        offload (B) to a teammate outside the ruck. Nobody can snatch the core out of a ruck from the side: join it and out-pull it.
-// FIGHT  Land a punch (grip held, fast swing) on a rival who isn't carrying and you duel: first to DUEL_HITS. Block with a glove in front of your face,
-//        or duck. The loser sits in the penalty box for BIN_TIME. Start it with the core nowhere near and BOTH of you go.
+// FIGHT  Land a punch (grip held, fast swing) on a rival who isn't carrying and you duel until one of you is knocked out (health
+//        bars). Their jabs come in combos (red flash): block with a glove in front of your face, or move your head. Heavy swings
+//        (gold flash) can only be dodged. Their guard goes up and down: hit when it is down, or right after you block or dodge
+//        (a counter, which hits much harder). The loser sits in the penalty box for BIN_TIME. Start it with the core nowhere
+//        near and BOTH of you go.
 // BOX    A see-through cell above (or beside) the level. You can watch the whole match from it. You can't do anything else.
 const BRAWL = {
   inRuck(a) { const r = this.ruck; return !!r && (r.A.includes(a) || r.B.includes(a)); },
@@ -96,33 +99,55 @@ const BRAWL = {
 
   // ---------------------------------------------------------------- fights
   // Your punches: a fast glove into a rival's body. On the carrier that is a tackle (a ruck); on anyone else it is a fight.
+  // In a fight a punch does more the faster the glove is moving, more again on the helmet, and much more as a counter.
   updatePunches(inp, dt) {
     if (!(this.fights || this.state === 'training') || !this.free('player') && !this.inDuel('player')) return;
     this.punchCool = Math.max(0, (this.punchCool || 0) - dt);
     if (this.punchCool > 0) return;
-    let target = null;
+    let target = null, hand = null, head = false;
     for (const h of inp.hands) {
       if (h.desktop) { if (!inp.punch) continue; } else if (!h.grip || h.realSpeed < PUNCH_SPEED) continue;
       for (const b of this.matchBots) {
         if (b.team === 'blue' || b.bin > 0 || b.ruck) continue;
-        const chest = b.pos.clone().add(new T.Vector3(0, 1.0, 0));
-        if (h.glove.distanceTo(chest) < (h.desktop ? 2.4 : 0.95) && this.bodyPos().distanceTo(chest) < PUNCH_R + 1.2) { target = b; pulse(h, 1, 90); break; }
+        const chest = b.pos.clone().add(new T.Vector3(0, 1.0, 0)), helm = b.pos.clone().add(new T.Vector3(0, 1.55, 0));
+        const dc = h.glove.distanceTo(chest), dh = h.glove.distanceTo(helm);
+        if (Math.min(dc, dh) < (h.desktop ? 2.4 : 0.95) && this.bodyPos().distanceTo(chest) < PUNCH_R + 1.2) { target = b; hand = h; head = !h.desktop && dh < 0.4 && dh < dc; break; }
       }
       if (target) break;
     }
     if (!target) return;
-    this.punchCool = 0.38;
-    if (this.ball.holder === target && !this.ruck && !this.inDuel('player')) return this.startRuck('player', target, false);
+    this.punchCool = PUNCH_COOL;
+    if (this.ball.holder === target && !this.ruck && !this.inDuel('player')) { pulse(hand, 1, 90); return this.startRuck('player', target, false); }
     let duel = this.duels.find(d => (d.a === 'player' && d.b === target) || (d.b === 'player' && d.a === target));
     if (!duel) { if (this.inDuel('player') || this.inDuel(target) || !this.free('player')) return; duel = this.startDuel('player', target); }
-    // a ready bot gets a glove up now and then
-    if (Math.random() < 0.12 + (2 - this.level.punch) * 0.12) { this.flash('BLOCKED', 0.5); beepAt(240, 60, 0.06, 'square', target.pos); return; }
-    this.landHit(duel, 'player');
+    const speed = hand.desktop ? 3 + Math.random() * 1.6 : hand.realSpeed, power = Math.max(0, Math.min(1, (speed - PUNCH_SPEED) / (PUNCH_FULL - PUNCH_SPEED)));
+    let dmg = PUNCH_DMG[0] + (PUNCH_DMG[1] - PUNCH_DMG[0]) * power; const tags = [];
+    if (head) { dmg *= HEAD_BONUS; tags.push('HEADSHOT'); }
+    if (duel.counterT > 0) { dmg *= COUNTER_BONUS; tags.push('COUNTER'); duel.counterT = 0; }
+    if (duel.guardT > 0 && !duel.wind) {
+      // their guard is up: most of it lands on the glove, and they answer straight away
+      dmg *= GUARD_CHIP; duel.streak = 0; duel.next = Math.min(duel.next, 0.3);
+      this.flash('BLOCKED: wait for the guard to drop', 0.6, { color: '#ffd166' }); beepAt(240, 60, 0.08, 'square', target.pos); pulse(hand, 0.5, 50);
+      return this.landHit(duel, 'player', dmg, { quiet: true });
+    }
+    duel.streak = this.time - (duel.lastLand || -9) < 1.4 ? Math.min(STREAK_MAX, (duel.streak || 0) + 1) : 0; duel.lastLand = this.time;
+    dmg *= 1 + STREAK_BONUS * duel.streak; if (duel.streak >= 1) tags.push(`x${duel.streak + 1}`);
+    pulse(hand, 1, 60 + power * 120);
+    // a clean hit knocks their rhythm: the jab they were winding up is gone, and a big one drops their guard
+    // Only a solid hit stops the jab they were winding up. After a couple of clean hits they cover up, so a fight has a rhythm
+    // (hit, hit, they guard, they swing) instead of ending in one flurry; a really big hit breaks the guard open instead.
+    if (dmg >= 12) { if (duel.wind && duel.wind.kind !== 'heavy') duel.wind = null; duel.next += 0.25; }
+    duel.clean = (duel.clean || 0) + 1;
+    if (dmg >= 16) { duel.guardT = 0; duel.guardNext = 1.2; duel.clean = 0; }
+    else if (!duel.training && !duel.wind && duel.clean >= (this.level.punch > 1.3 ? 3 : 2)) { duel.clean = 0; duel.guardT = (0.9 + Math.random() * 0.6) / this.level.punch; }
+    this.landHit(duel, 'player', dmg, { tags, power });
   },
   startDuel(a, b) {
     const pa = this.posOf(a), pb = this.posOf(b), mid = pa.clone().lerp(pb, 0.5);
-    const offBall = this.ball.pos.distanceTo(mid) > DUEL_BALL_R;
-    const duel = { a, b, t: 0, hits: [0, 0], offBall, next: 0.9 + Math.random() * 0.5, wind: null, at: mid };
+    const offBall = this.mode !== 'control' && this.ball.pos.distanceTo(mid) > DUEL_BALL_R, mine = a === 'player' || b === 'player';
+    const training = this.state === 'training', bot = a === 'player' ? b : b === 'player' ? a : null;
+    const duel = { a, b, bot, t: 0, hp: [DUEL_HP, DUEL_HP], hits: [0, 0], offBall, next: 1.1 + Math.random() * 0.5, wind: null, combo: 0, guardT: 0, guardNext: 0.6, counterT: 0, streak: 0, beat: 0, at: mid, training };
+    if (training && bot) duel.hp[a === 'player' ? 1 : 0] = 60;      // the training rival goes down after a few good ones
     this.duels.push(duel);
     for (const x of [a, b]) if (x === 'player') this.vel.set(0, 0, 0); else { x.duel = duel; x.vel.set(0, 0, 0); x.path = []; }
     // square up: the bot faces its rival about an arm's length away
@@ -132,74 +157,124 @@ const BRAWL = {
       this.placeBot(x, [at(dir), at(side), at(side.clone().negate()), at(dir.clone().negate())]);
       x.facing.copy(tmp.subVectors(op, x.pos).setY(0)).normalize();
     }
-    const mine = a === 'player' || b === 'player';
-    if (mine) { this.tip('punch', true); this.flash(offBall ? 'FIGHT! (far from the CORE: you BOTH go to the box)' : `FIGHT! First to ${DUEL_HITS}. Block with a glove, or duck.`, 2.2, { big: false, color: '#ff4f6a' }); for (const h of this.hands || []) pulse(h, 0.8, 120); }
-    beepAt(180, 180, 0.12, 'square', mid); beepAt(120, 260, 0.1, 'sawtooth', mid, 0.1);
+    if (mine) {
+      this.tip('punch', true);
+      this.flash(offBall ? 'FIGHT! (far from the CORE: you BOTH go to the box)' : 'FIGHT! Knock them out.', 2, { big: true, color: '#ff4f6a', sub: this.inVR ? 'Red flash: block or dodge. Gold flash: dodge. Hit when their guard drops.' : 'X punches. Hold G to block. A or D dodges.' });
+      for (const h of this.hands || []) pulse(h, 1, 200);
+    }
+    beepAt(180, 180, 0.12, 'square', mid); beepAt(120, 260, 0.1, 'sawtooth', mid, 0.1); noiseAt(260, 0.1, mid, [400, 1600]);
     return duel;
   },
-  landHit(duel, by) {
-    const i = duel.a === by ? 0 : 1, victim = i === 0 ? duel.b : duel.a;
-    duel.hits[i]++;
-    const vp = this.posOf(victim);
-    this.bursts.fire(vp.clone().add(new T.Vector3(0, victim === 'player' ? 0 : 1.2, 0)), '#ffffff', 0.5); noiseAt(120, 0.16, vp, [1800, 300]); beepAt(140, 90, 0.12, 'square', vp);
-    if (victim === 'player') { this.hurtFlash = 1; for (const h of this.hands || []) pulse(h, 1, 180); this.flash(`HIT! ${duel.hits[duel.a === 'player' ? 0 : 1]} : ${duel.hits[duel.a === 'player' ? 1 : 0]}`, 0.8, { color: '#ff4f6a' }); }
-    else { victim.hitT = 1; if (by === 'player') this.flash(`LANDED! ${duel.hits[duel.a === 'player' ? 0 : 1]} : ${duel.hits[duel.a === 'player' ? 1 : 0]}`, 0.8, { color: '#66ffff' }); }
-    if (duel.hits[i] >= DUEL_HITS) this.endDuel(duel);
+  // by = who threw it. Takes dmg off the other one's health; no health left is a knockout.
+  landHit(duel, by, dmg, opts = {}) {
+    const i = duel.a === by ? 0 : 1, victim = i === 0 ? duel.b : duel.a, vi = 1 - i;
+    duel.hits[i]++; duel.hp[vi] = Math.max(0, duel.hp[vi] - dmg);
+    const vp = this.posOf(victim), big = dmg >= DUEL_HP * 0.1, at = vp.clone().add(new T.Vector3(0, victim === 'player' ? 0 : 1.2, 0));
+    if (!opts.quiet) {
+      this.bursts.fire(at, big ? '#ffd166' : '#ffffff', big ? 0.9 : 0.5); noiseAt(big ? 200 : 120, big ? 0.22 : 0.16, vp, [big ? 900 : 1800, big ? 120 : 300]); beepAt(big ? 90 : 140, big ? 160 : 90, 0.14, 'square', vp);
+      if (big) beepAt(60, 220, 0.12, 'sine', vp, 0.02);
+    }
+    if (victim === 'player') {
+      this.hurtFlash = Math.min(1.4, 0.7 + dmg / 30); for (const h of this.hands || []) pulse(h, 1, big ? 320 : 160);
+      this.flash(big ? 'HEAVY HIT!' : 'HIT!', 0.7, { color: '#ff4f6a' });
+    } else {
+      victim.hitT = big ? 1.6 : 1;
+      if (by === 'player' && !opts.quiet) this.flash([big ? 'BIG HIT!' : 'LANDED!', ...(opts.tags || [])].join('  '), 0.7, { color: opts.tags && opts.tags.length ? '#ffd166' : '#66ffff' });
+    }
+    if (duel.hp[vi] <= 0) this.endDuel(duel, by);
+  },
+  // The rival's next move against you: a jab combo, a heavy swing or a feint. Harder bots feint more and swing heavy more often.
+  botAttack(duel) {
+    const hard = Math.max(0, Math.min(1, (1.5 - this.level.punch) / 0.6)), r = Math.random();   // 0 rookie .. 1 legend
+    if (duel.training) { duel.combo = 0; return { kind: 'jab', t: 0.7 }; }
+    if (r < 0.14 + hard * 0.12) return { kind: 'feint', t: 0.3 };
+    if (r < 0.4 + hard * 0.12) { duel.combo = 0; return { kind: 'heavy', t: HEAVY_WIND * (1.1 - hard * 0.2) }; }
+    duel.combo = Math.floor(Math.random() * (2 + hard * 1.5));                 // this many more jabs follow
+    return { kind: 'jab', t: JAB_WIND * (1.15 - hard * 0.25) };
   },
   updateFights(inp, dt, live) {
     this.hurtFlash = Math.max(0, (this.hurtFlash || 0) - dt * 2.5);
     if (!live) return;
     this.updatePunches(inp, dt);
     // a marker who has been shadowing someone for a while may pick a fight
-    if (this.fights && (this.fightT = (this.fightT || 8) - dt) <= 0) {
+    if (this.fights && this.state === 'playing' && (this.fightT = (this.fightT || 8) - dt) <= 0) {
       this.fightT = 6 + Math.random() * 10;
-      const b = this.matchBots.find(x => x.role === 'mark' && x.markOn && this.free(x) && this.free(x.markOn) && x.markOn !== this.ball.holder && this.posOf(x.markOn).distanceTo(x.pos) < 4.5 && this.ball.pos.distanceTo(x.pos) < DUEL_BALL_R);
+      const b = this.matchBots.find(x => (x.role === 'mark' || x.role === 'zone') && x.markOn && this.free(x) && this.free(x.markOn) && x.markOn !== this.ball.holder && this.posOf(x.markOn).distanceTo(x.pos) < 4.5 && (this.mode === 'control' || this.ball.pos.distanceTo(x.pos) < DUEL_BALL_R));
       if (b && !(b.markOn === 'player' && this.playerGrace > 0)) this.startDuel(b, b.markOn);
     }
     for (const duel of [...this.duels]) {
       duel.t += dt;
-      const { a, b } = duel, mine = a === 'player' || b === 'player';
+      const { a, b, bot } = duel;
       for (const x of [a, b]) if (x !== 'player') x.vel.set(0, 0, 0);
-      if (mine) {
-        const bot = a === 'player' ? b : a;
-        // the bot winds up (arm back, a growl), then throws: block with a glove in front of your face, or move your head
-        if (!duel.wind && (duel.next -= dt) <= 0) { duel.wind = { t: 0.5, head: this.headPos.clone() }; beepAt(520, 110, 0.08, 'sawtooth', bot.pos); }
-        if (duel.wind && (duel.wind.t -= dt) <= 0) {
-          const face = this.headPos.clone().addScaledVector(tmp.subVectors(bot.pos, this.headPos).setY(0).normalize(), 0.3);
-          const blocked = (this.hands || []).some(h => !h.desktop && h.glove.distanceTo(face) < 0.42) || (!this.inVR && this.keys.KeyG);
-          const dodged = this.headPos.distanceTo(duel.wind.head) > 0.26;
-          duel.wind = null; duel.next = this.level.punch * (0.8 + Math.random() * 0.6); bot.punchT = 0.25;
-          if (blocked) { this.flash('BLOCKED IT', 0.6, { color: '#66ffff' }); for (const h of this.hands || []) pulse(h, 0.6, 60); beepAt(260, 60, 0.07, 'square', bot.pos); }
-          else if (dodged) { this.flash('DODGED', 0.6, { color: '#66ffff' }); }
-          else this.landHit(duel, bot);
+      if (bot) {
+        const me = a === 'player' ? 0 : 1;
+        duel.counterT = Math.max(0, duel.counterT - dt);
+        // their guard goes up and down; you hit when it is down, or straight after you block or dodge
+        if (duel.guardT > 0) { if ((duel.guardT -= dt) <= 0) { duel.guardT = 0; duel.guardNext = (duel.training ? 2.6 : 0.9 + Math.random() * 0.8) * this.level.punch; } }
+        else if (!duel.wind && (duel.guardNext -= dt) <= 0) duel.guardT = duel.training ? 0.7 : (1.0 + Math.random() * 0.8) / this.level.punch;
+        if (!duel.wind && (duel.next -= dt) <= 0) {
+          const w = this.botAttack(duel); duel.wind = { ...w, t0: w.t, head: this.headPos.clone() }; duel.guardT = 0;
+          beepAt(w.kind === 'heavy' ? 300 : 520, w.kind === 'heavy' ? 420 : 110, 0.09, 'sawtooth', bot.pos);
+          if (w.kind === 'heavy') for (const h of this.hands || []) pulse(h, 0.35, 300);
         }
-      } else if ((duel.next -= dt) <= 0) { duel.next = 0.7; this.landHit(duel, Math.random() < 0.5 ? a : b); }
-      if (this.duels.includes(duel) && duel.t >= DUEL_TIME) this.endDuel(duel);
+        if (duel.wind && (duel.wind.t -= dt) <= 0) {
+          const w = duel.wind, face = this.headPos.clone().addScaledVector(tmp.subVectors(bot.pos, this.headPos).setY(0).normalize(), 0.3);
+          const blocked = (this.hands || []).some(h => !h.desktop && h.glove.distanceTo(face) < BLOCK_R) || (!this.inVR && !!this.keys.KeyG);
+          const dodged = this.headPos.distanceTo(w.head) > DODGE_DIST || (!this.inVR && !!(this.keys.KeyA || this.keys.KeyD));
+          duel.wind = null;
+          const gap = this.level.punch * (duel.training ? 1.6 : 1);
+          if (w.kind === 'feint') { duel.next = 0.25 + Math.random() * 0.2; duel.combo = 0; }
+          else {
+            bot.punchT = 0.25;
+            duel.next = duel.combo > 0 ? 0.22 + Math.random() * 0.12 : gap * (0.9 + Math.random() * 0.7); if (duel.combo > 0) duel.combo--;
+            if (dodged) { duel.counterT = COUNTER_TIME; duel.combo = 0; duel.next = Math.max(duel.next, 0.8); this.flash('DODGED! COUNTER NOW', 0.8, { color: '#66ffff' }); beep(990, 60, 0.07); }
+            else if (blocked && w.kind === 'jab') { duel.counterT = COUNTER_TIME * 0.8; this.flash('BLOCKED! COUNTER NOW', 0.7, { color: '#66ffff' }); for (const h of this.hands || []) pulse(h, 0.7, 70); beepAt(260, 60, 0.08, 'square', bot.pos); }
+            else if (blocked) { this.flash('GUARD BROKEN (dodge the gold ones)', 0.9, { color: '#ffd166' }); this.landHit(duel, bot, BOT_HEAVY * 0.5); }
+            else this.landHit(duel, bot, w.kind === 'heavy' ? BOT_HEAVY : BOT_JAB * (0.85 + Math.random() * 0.3));
+          }
+        }
+        // low on health: your heart thumps in your hands
+        if (this.duels.includes(duel) && duel.hp[me] < DUEL_HP * 0.3 && (duel.beat -= dt) <= 0) { duel.beat = 0.55; beep(70, 90, 0.1, 'sine'); beep(60, 110, 0.08, 'sine', 0.14); for (const h of this.hands || []) pulse(h, 0.3, 50); }
+      } else if ((duel.next -= dt) <= 0) {
+        // two bots: they trade until one drops
+        duel.next = 0.5 + Math.random() * 0.5;
+        const by = Math.random() < 0.5 ? a : b; by.punchT = 0.25; this.landHit(duel, by, 6 + Math.random() * 12);
+      }
+      if (this.duels.includes(duel) && duel.t >= DUEL_TIME) this.endDuel(duel, null);
     }
   },
-  endDuel(duel) {
+  // winner = who landed the knockout; null = out of time: a clear lead on health wins it, otherwise it is a split.
+  endDuel(duel, winner) {
     this.duels.splice(this.duels.indexOf(duel), 1);
     const { a, b } = duel;
     for (const x of [a, b]) if (x !== 'player') x.duel = null;
-    const [ha, hb] = duel.hits, loser = ha === hb ? null : ha > hb ? b : a, winner = loser === a ? b : loser === b ? a : null;
-    const mine = a === 'player' || b === 'player';
+    const [ha, hb] = duel.hp, ko = !!winner;
+    if (!winner && Math.abs(ha - hb) >= DUEL_EDGE) winner = ha > hb ? a : b;
+    const loser = winner ? (winner === a ? b : a) : null, mine = a === 'player' || b === 'player';
+    if (ko) {
+      const lp = this.posOf(loser).clone().add(new T.Vector3(0, loser === 'player' ? 0 : 1.2, 0));
+      this.bursts.fire(lp, '#ffd166', 1.6); this.bursts.fire(lp, '#ffffff', 1.1); noiseAt(420, 0.24, lp, [1400, 80]); beepAt(70, 380, 0.16, 'sine', lp);
+    }
     if (duel.offBall) {
       this.sendToBin(a, BIN_TIME); this.sendToBin(b, BIN_TIME);
       this.flash(mine ? 'OFF-BALL FIGHT: you BOTH sit in the box' : `OFF-BALL FIGHT: ${this.nameOf(a)} and ${this.nameOf(b)} to the box`, 2.2, { color: '#ff4f6a' });
     } else if (loser) {
       this.sendToBin(loser, BIN_TIME);
-      if (winner === 'player') { this.stats.hits++; this.playerGrace = 1; } else winner.grace = 1;
-      this.flash(loser === 'player' ? `YOU LOST THE FIGHT: ${BIN_TIME} s in the box` : `${this.nameOf(winner)} WON THE FIGHT: ${this.nameOf(loser)} sits for ${BIN_TIME} s`, 2.2, { big: mine, color: TEAM_COLOR[this.teamOf(winner)] });
-    } else if (mine) this.flash('FIGHT OVER: nobody landed enough', 1.2);
-    this.lastEvent = duel.offBall ? 'OFF-BALL FIGHT: both benched' : loser ? `${this.nameOf(loser)} in the box` : this.lastEvent;
-    beep(300, 300, 0.1, 'square');
+      if (winner === 'player') { this.stats.hits++; this.playerGrace = 1.5; this.energy = ENERGY_MAX; } else winner.grace = 1;
+      const how = ko ? 'KNOCKOUT' : 'WON ON POINTS';
+      this.flash(loser === 'player' ? (ko ? 'KNOCKED OUT' : 'LOST ON POINTS') : winner === 'player' ? `${how}!` : `${this.nameOf(winner)}: ${how}`, 2.4,
+                 { big: mine, color: TEAM_COLOR[this.teamOf(winner)], sub: loser === 'player' ? `${BIN_TIME} s in the penalty box` : `${this.nameOf(loser)} sits for ${BIN_TIME} s` });
+      if (mine) for (const h of this.hands || []) pulse(h, 1, 400);
+    } else if (mine) this.flash('SPLIT: too close to call. Play on!', 1.6, { color: '#ffd166' });
+    this.lastEvent = duel.offBall ? 'OFF-BALL FIGHT: both benched' : loser ? `${ko ? 'KO' : 'FIGHT'}: ${this.nameOf(loser)} in the box` : this.lastEvent;
+    beep(300, 300, 0.1, 'square'); if (ko) { beep(523, 140, 0.09, 'triangle', 0.1); beep(784, 300, 0.09, 'triangle', 0.24); }
   },
 
   // ---------------------------------------------------------------- the penalty box
   sendToBin(x, secs) {
     const bin = WORLD.bin; if (!bin) return;
     if (this.ball.holder === x) { this.ball.holder = null; this.ball.vel.set(0, 2, 0); }
-    const slot = this.binSlot = ((this.binSlot || 0) + 1) % 6, p = new T.Vector3(bin.min.x + 1.6 + (slot % 3) * ((bin.max.x - bin.min.x - 3.2) / 2), bin.min.y + 1.2, bin.c.z + (slot < 3 ? -1.6 : 1.6));
+    const slot = this.binSlot = ((this.binSlot || 0) + 1) % 6, p = new T.Vector3(bin.min.x + 1.6 + (slot % 3) * ((bin.max.x - bin.min.x - 3.2) / 2), bin.min.y + 1.2 + WORLD.oy, bin.c.z + (slot < 3 ? -1.6 : 1.6));
     if (x === 'player') { this.playerBin = secs; this.placePlayer(p.x, p.y + 1.2, p.z, this.rig.rotation.y); this.blinkT = 0.3; this.charge = null; }
     else { x.bin = secs; x.pos.copy(p); x.vel.set(0, 0, 0); x.facing.set(0, 0, -HOME_SIGN[x.team]); x.path = []; }
   },
